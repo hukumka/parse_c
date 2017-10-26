@@ -1,0 +1,8 @@
+[package]
+name = "parse_c"
+version = "0.1.0"
+authors = ["Arnold Pavel <hukumka212@gmail.com>"]
+
+[dependencies]
+cata = {path = "../cata/"}
+derive-error = "0.0.3"

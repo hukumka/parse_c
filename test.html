@@ -1,0 +1,34 @@
+<head>
+	<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+	<script type="text/javascript" src="namespace.js"></script>
+	<script type="text/javascript" src="code_raw.js"></script>
+</head>
+
+<body>
+	<style>
+		div.code-line-select{
+			color: red
+		}
+
+		div.code-block{
+			margin-left: 40px
+		}
+	</style>
+	<script type="text/javascript" >
+		var namespace = new NamespaceHolder();
+		namespace.namespace.define('x', -2);
+		block.create_view();
+		document.body.appendChild(block.view);
+		block.selected().setAttribute('class', 'code-line-select');
+		function step(){
+			block.selected().setAttribute('class', 'code-line');
+			var res = block.step(namespace);
+			if(res.ret != undefined){
+				console.log("result: ", res.ret);
+			}
+			block.selected().setAttribute('class', 'code-line-select');
+			namespace.log();
+		}
+	</script>
+</body>
+
