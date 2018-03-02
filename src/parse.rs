@@ -10,12 +10,12 @@ use cata::lexer::{tokenize, Token, TokenData};
 use cata::parser::parse_operators;
 use cata::parser::parse_items::{
     test_for_operator, 
-    get_token,
-    get_tree
+    get_token
 };
 use cata::misc::split_by;
 
 
+#[derive(Debug, Eq, PartialEq)]
 struct FunctionDef{
     ret_type: TypeName,
     name: String,
@@ -23,20 +23,24 @@ struct FunctionDef{
     block: Block
 }
 
+#[derive(Debug, Eq, PartialEq)]
 struct TypeName{
     base: String,
     pointer_count: usize
 }
 
+#[derive(Debug, Eq, PartialEq)]
 struct Block{
     statements: Vec<Statement>
 }
 
+#[derive(Debug, Eq, PartialEq)]
 struct Operator{
     name: String
 }
 
 
+#[derive(Debug, Eq, PartialEq)]
 enum Statement{
     Expression(Expression),
     Condition(Condition),
@@ -45,6 +49,7 @@ enum Statement{
 }
 
 
+#[derive(Debug, Eq, PartialEq)]
 enum Expression{
     FuncCall(Box<FuncCall>),
     BinOp(Box<BinOp>),
@@ -55,12 +60,14 @@ enum Expression{
 }
 
 
+#[derive(Debug, Eq, PartialEq)]
 struct VarDef{
     type_: TypeName,
     assignments: Vec<(String, Expression)>
 }
 
 
+#[derive(Debug, Eq, PartialEq)]
 struct ForLoop{
     init: ForLoopInit,
     step: Expression,
@@ -69,24 +76,28 @@ struct ForLoop{
 }
 
 
+#[derive(Debug, Eq, PartialEq)]
 enum ForLoopInit{
     Expression(Expression),
     VarDef(VarDef)
 }
 
 
+#[derive(Debug, Eq, PartialEq)]
 struct Condition{
     ifs: Vec<(Expression, Block)>,
     else_block: Option<Block>
 }
 
 
+#[derive(Debug, Eq, PartialEq)]
 struct FuncCall{
     name: String,
     arguments: Vec<Expression>
 }
 
 
+#[derive(Debug, Eq, PartialEq)]
 struct BinOp{
     op: String,
     left: Expression,
@@ -94,12 +105,14 @@ struct BinOp{
 }
 
 
+#[derive(Debug, Eq, PartialEq)]
 struct PrefixOp{
     op: String,
     right: Expression
 }
 
 
+#[derive(Debug, Eq, PartialEq)]
 struct SyffixOp{
     op: String,
     left: Expression
@@ -294,7 +307,7 @@ impl ParseFromBracketTree for Statement{
                     Ok((Statement::VarDef(var_def), rest))
                 }else{
                     let (expr, tree) = Expression::parse(tree)?;
-                    let (semicolon, tree) = tree.split_first().ok_or(parse_error_fmt!("Statement::parse: expected ';', but found nothing"))?;
+                    let (_semicolon, tree) = tree.split_first().ok_or(parse_error_fmt!("Statement::parse: expected ';', but found nothing"))?;
                     Ok((Statement::Expression(expr), tree))
                 }
             }
@@ -310,17 +323,23 @@ impl ParseFromBracketTree for Condition{
         let (if_token, tree) = tree.split_first()
             .ok_or(parse_error_fmt!("Condition::parse: Expected 'if' keyword, but found nothing"))?;
         expect_keyword(if_token, &["if"], "Condition::parse")?;
-        let (expr, tree) = Expression::parse(tree)?;
-        let (block, tree) = parse_statement_or_block(tree)?;
-        if let Some((else_token, new_tree)) = tree.split_first(){
-            if test_name(else_token, &|n| n == "else"){
-                let (else_block, tree) = parse_statement_or_block(new_tree)?;
-                Ok((Condition{ifs: vec![(expr, block)], else_block: Some(else_block)}, tree))
+        let (cond, tree) = tree.split_first()
+            .ok_or(parse_error_fmt!("Condition::parse: Expected condition expression, but found nothing"))?;
+        if let &BTI::Tree(ref cond) = cond{
+            let expr = Expression::parse_from_slice(&cond.nodes)?;
+            let (block, tree) = parse_statement_or_block(tree)?;
+            if let Some((else_token, new_tree)) = tree.split_first(){
+                if test_name(else_token, &|n| n == "else"){
+                    let (else_block, tree) = parse_statement_or_block(new_tree)?;
+                    Ok((Condition{ifs: vec![(expr, block)], else_block: Some(else_block)}, tree))
+                }else{
+                    Ok((Condition{ifs: vec![(expr, block)], else_block: None}, tree))
+                }
             }else{
                 Ok((Condition{ifs: vec![(expr, block)], else_block: None}, tree))
             }
         }else{
-            Ok((Condition{ifs: vec![(expr, block)], else_block: None}, tree))
+            Err(parse_error_fmt!("Condition::parse: Expected ('condition'), but {:?} found.", cond))
         }
     }
 }
@@ -344,14 +363,14 @@ impl ParseFromBracketTree for ForLoop{
                 let (expr, ls) = Expression::parse(ls)?;
                 (ForLoopInit::Expression(expr), ls)
             };
-            let (semicolon, ls) = ls.split_first()
+            let (_semicolon, ls) = ls.split_first()
                 .ok_or(parse_error_fmt!("ForLoop::parse: Expected ';' but found nothing"))?;
             // parse increment
             let (condition, ls) = Expression::parse(ls)?;
-            let (semicolon, ls) = ls.split_first()
+            let (_semicolon, ls) = ls.split_first()
                 .ok_or(parse_error_fmt!("ForLoop::parse: Expected ';' but found nothing"))?;
             let (increment, ls) = Expression::parse(ls)?;
-            if tree.is_empty(){
+            if ls.is_empty(){
                 let (block, tree) = parse_statement_or_block(tree)?;
                 Ok((ForLoop{init, step: increment, cond: condition, block}, tree))
             }else{
@@ -372,8 +391,16 @@ impl ParseFromBracketTree for VarDef{
         loop{
             // parse 'name operator expression' as 'name = expr'
             if let Ok((assignment, tr)) = Self::parse_assignment(tree){
-                tree = tr;
                 assignments.push(assignment);
+                match Operator::parse(tr){
+                    Ok((ref op, ref tr)) if op.name == "," => {
+                        tree = tr;
+                    },
+                    _ => {
+                        tree = tr;
+                        break;
+                    }
+                }
             }else{
                 break;
             }
@@ -402,7 +429,7 @@ impl VarDef{
 
 fn parse_statement_or_block(tree: &[BTI])->Result<(Block, &[BTI]), ParseError>{
     let statement_wrapped = Statement::parse(tree);
-    let (block, tree) = if let Ok((statement, _)) = statement_wrapped{
+    let (block, tree) = if let Ok((statement, tree)) = statement_wrapped{
         (Block::from_statement(statement), tree)
     }else{
         Block::parse(tree)?
@@ -438,6 +465,677 @@ impl ParseFromBracketTree for Expression{
 
 impl Expression{
     fn parse_until<'a>(tree: &'a [BTI], stop_operator: &str)->Result<(Self, &'a [BTI]), ParseError>{
-        Err(parse_error_fmt!("no implemented"))
+        // get part of slice from which expression will be parsed
+        let to = tree.iter()
+            .enumerate()
+            .filter(|&(_, a)| test_for_operator(a, stop_operator) || test_for_operator(a, ";"))
+            .next();
+        let (expr_tree, tree) = if let Some(bt) = to{
+            tree.split_at(bt.0)
+        }else{
+            tree.split_at(tree.len())
+        };
+        // parse expression
+        let expr = Self::parse_from_slice(expr_tree)?;
+        Ok((expr, tree))
+    }
+
+    fn parse_from_slice(tree: &[BTI])->Result<Self, ParseError>{
+        if tree.is_empty(){
+            Err(parse_error_fmt!("Expression::parse_from_slice: trying to parse empty expression"))
+        }else{
+            Self::parse_from_slice_simple(tree)
+                .or_else(|_| Self::parse_operators(tree))
+        }
+    }
+
+    fn parse_from_slice_simple(tree: &[BTI])->Result<Self, ParseError>{
+
+        Self::parse_constant(tree)
+            .or_else(|_| Self::parse_name(tree))
+            .or_else(|_| Self::parse_function_call(tree))
+    }
+
+    fn parse_constant(tree: &[BTI])->Result<Self, ParseError>{
+        if tree.len() == 1{
+            if let BTI::Token(TokenData{token: Token::Value(ref value), ..}) = tree[0]{
+                Ok(Expression::Constant(value.clone()))
+            }else{
+                Err(parse_error_fmt!("Expression::parse_constant: Expected constant, found {:?}", tree[0]))
+            }
+        }else{
+            Err(parse_error_fmt!("Expression::parse_constant: Expected constant, found {:?}", tree))
+        }
+    }
+
+    fn parse_name(tree: &[BTI])->Result<Self, ParseError>{
+        if tree.len() == 1{
+            if let Some(name) = get_name(&tree[0]){
+                Ok(Expression::Variable(name))
+            }else{
+                Err(parse_error_fmt!("Expression::parse_name: Expected name, found {:?}", tree[0]))
+            }
+        }else{
+            Err(parse_error_fmt!("Expression::parse_name: Expected name, found {:?}", tree))
+        }
+    }
+
+    fn parse_function_call(tree: &[BTI])->Result<Self, ParseError>{
+        let (name, tree) = String::parse(tree)?;
+        match tree{
+            &[BTI::Tree(ref inner)] => {
+                if check_tree_brackets(inner, "(", ")"){
+                    let arguments = Self::parse_call_arguments(&inner.nodes)?;
+                    Ok(Expression::FuncCall(
+                        Box::new(FuncCall{name, arguments})
+                    ))
+                }else{
+                    Err(parse_error_fmt!("Expression::parse_function_call: Expected function call, but args wrapped in {:?}", inner.brackets))
+                }
+            },
+            _ => {
+                Err(parse_error_fmt!("Expression::parse_function_call: Expected argument list, found {:?}", tree))
+            }
+        }
+    }
+
+    fn parse_call_arguments(tree: &[BTI])->Result<Vec<Expression>, ParseError>{
+        let mut args = vec![];
+        let mut tree = tree;
+        if tree.len() == 0{
+            Ok(args)
+        }else{
+            loop{
+                let (arg, tr) = Expression::parse_until(tree, ",")?;
+                println!("{:?}", tr);
+                args.push(arg);
+                if tr.len() == 0{
+                    break;
+                }
+                if let Some((_coma, tr)) = tr.split_first(){
+                    tree = tr;
+                }else{
+                    return Err(parse_error_fmt!("Expression::parse_call_arguments: Expected ',', found nohting"))
+                }
+            }
+            Ok(args)
+        }
+    }
+
+    fn parse_operators(tree: &[BTI])->Result<Self, ParseError>{
+        let comparator = parse_operators::PrecedenceLevels::new();
+        let op_tree = parse_operators::NodeBuilder::new(
+            &comparator, 
+            Self::can_be_syffix
+        ).build_tree(tree);
+        if let parse_operators::Node::Leaf(x) = op_tree{
+            Err(parse_error_fmt!("Expression::parse_operators: expected complex expression, but {:?} found", x))
+        }else{
+            Self::operator_tree_to_expression(&op_tree)
+        }
+    }
+
+    fn can_be_syffix(operator: &str)->bool{
+        ["++", "--"].contains(&operator)
+    }
+
+    fn operator_tree_to_expression<'a>(op_tree: &parse_operators::Node<'a>)->Result<Self, ParseError>{
+        match op_tree{
+            &parse_operators::Node::Binary(ref bin) => {
+                let op = bin.operator.op.clone();
+                let left = Self::operator_tree_to_expression(&bin.left)?;
+                let right = Self::operator_tree_to_expression(&bin.right)?;
+                Ok(Expression::BinOp(Box::new(BinOp{op, left, right})))
+            },
+            &parse_operators::Node::Prefix(ref bin) => {
+                let op = bin.operator.op.clone();
+                let right = Self::operator_tree_to_expression(&bin.node)?;
+                Ok(Expression::PrefixOp(Box::new(PrefixOp{op, right})))
+            },
+            &parse_operators::Node::Syffix(ref bin) => {
+                let op = bin.operator.op.clone();
+                let left = Self::operator_tree_to_expression(&bin.node)?;
+                Ok(Expression::SyffixOp(Box::new(SyffixOp{op, left})))
+            },
+            &parse_operators::Node::Leaf(tree) => {
+                match tree{
+                    &[BTI::Tree(ref tree)] if check_tree_brackets(&tree, "(", ")")  => {
+                        Expression::parse_from_slice(&tree.nodes)
+                    }
+                    _ => Expression::parse_from_slice_simple(tree)
+                }
+                
+            }
+        }
+    }
+}
+
+
+fn check_tree_brackets(tree: &BT, left: &str, right: &str)->bool{
+    // then brackets not specified, assumed that they correct
+    match tree.brackets{
+        Some((ref l, ref r)) => {
+            match (&l.token, &r.token){
+                (&Token::Bracket(ref l), &Token::Bracket(ref r)) => {
+                    l == left && r == right
+                },
+                _ => {
+                    panic!("check_tree_brackets: Incorrect bracket tokens");
+                }
+            }
+        },
+        _ => true
+    }
+}
+
+
+#[cfg(test)]
+mod tests{
+    use std::fmt::Debug;
+    use super::*;
+    use cata::parser::brackets::{
+        BracketTree, 
+        BracketTreeItem
+    };
+
+    #[test]
+    fn test_name_parse(){
+        // test for success
+        let nodes = bracket_tree!(
+            to[Name, "x"]
+            to[Operator, "*"]
+            br[
+                to[Value, "11"]
+            ]
+        );
+
+        let (s, nodes) = String::parse(&nodes.nodes).unwrap();
+        assert_eq!(s, "x");
+        assert_eq!(nodes.len(), 2);
+
+        // test for fail on empty tree
+        let nodes = bracket_tree!(
+        );
+
+        let s_wrapped = String::parse(&nodes.nodes);
+        match s_wrapped{
+            Err(ref e) if e.msg.contains("String::parse") => {},
+            _ => {
+                panic!("Expected String::parse error, but get {:?}", s_wrapped);
+            }
+        }
+
+        // test for fail on unappropriate token
+        let nodes = bracket_tree!(
+            to[Operator, "*"]
+            br[
+                to[Value, "11"]
+            ]
+        );
+        let s_wrapped = String::parse(&nodes.nodes);
+        test_for_error(s_wrapped, "String::parse");
+
+        let nodes = bracket_tree!(
+            br[
+                to[Value, "11"]
+            ]
+            to[Operator, "*"]
+        );
+        let s_wrapped = String::parse(&nodes.nodes);
+        test_for_error(s_wrapped, "String::parse");
+    }
+
+    #[test]
+    fn test_typename_parse(){
+        // test for success
+        let tree = &(bracket_tree!(
+            to[Name, "int"]
+            to[Operator, "*"]
+            to[Operator, "***"]
+            to[Operator, "**"]
+            to[Name, "x"]
+            to[Operator, "="]
+            to[Name, "y"]
+        ).nodes);
+        let (type_, tree) = TypeName::parse(tree).unwrap();
+        assert_eq!(type_.base, "int");
+        assert_eq!(type_.pointer_count, 6);
+        assert_eq!(tree.len(), 3);
+
+        let tree = &(bracket_tree!(
+            to[Name, "int"]
+            to[Operator, "*"]
+            to[Operator, "***"]
+            to[Operator, "**"]
+        ).nodes);
+        let (type_, tree) = TypeName::parse(tree).unwrap();
+        assert_eq!(type_.base, "int");
+        assert_eq!(type_.pointer_count, 6);
+        assert_eq!(tree.len(), 0);
+        
+        let tree = &(bracket_tree!(
+            to[Name, "int"]
+        ).nodes);
+        let (type_, tree) = TypeName::parse(tree).unwrap();
+        assert_eq!(type_.base, "int");
+        assert_eq!(type_.pointer_count, 0);
+        assert_eq!(tree.len(), 0);
+
+        let tree = &(bracket_tree!(
+            to[Name, "int"]
+            to[Name, "x"]
+        ).nodes);
+        let (type_, tree) = TypeName::parse(tree).unwrap();
+        assert_eq!(type_.base, "int");
+        assert_eq!(type_.pointer_count, 0);
+        assert_eq!(tree.len(), 1);
+
+        // test for fail on empty tree
+        let tree = &(bracket_tree!().nodes);
+        let type_wrapped = TypeName::parse(tree);
+        test_for_error(type_wrapped, "String::parse");
+
+        // test for fail on unapropriate token
+        let tree = &(bracket_tree!(to[Operator, "+"]).nodes);
+        let type_wrapped = TypeName::parse(tree);
+        test_for_error(type_wrapped, "String::parse");
+    }
+
+    #[test]
+    fn test_expression_parse_constant(){
+        // success
+        let tree = &(bracket_tree!(
+            to[Value, "some string"]
+        ).nodes);
+        let expr = Expression::parse_constant(tree).unwrap();
+        match expr{
+            Expression::Constant(ref value) if value == "some string" => {},
+            _ => {panic!("Expected Expression::Constant, but got {:?}", expr);}
+        }
+
+        // fail because of extra tokens
+        let tree = &(bracket_tree!(
+            to[Value, "1"]
+            to[Value, "2"]
+        ).nodes);
+        let expr_wrapped = Expression::parse_constant(tree);
+        test_for_error(expr_wrapped, "Expression::parse_constant");
+
+        // fail because of empty tree
+        let tree = &(bracket_tree!(
+        ).nodes);
+        let expr_wrapped = Expression::parse_constant(tree);
+        test_for_error(expr_wrapped, "Expression::parse_constant");
+        
+        // fail because of wrong token
+        let tree = &(bracket_tree!(
+            to[Name, "x"]
+        ).nodes);
+        let expr_wrapped = Expression::parse_constant(tree);
+        test_for_error(expr_wrapped, "Expression::parse_constant");
+    }
+
+    #[test]
+    fn test_expression_parse_name(){
+        // success
+        let tree = &(bracket_tree!(
+            to[Name, "some string"]
+        ).nodes);
+        let expr = Expression::parse_name(tree).unwrap();
+        match expr{
+            Expression::Variable(ref value) if value == "some string" => {},
+            _ => {panic!("Expected Expression::Variable, but got {:?}", expr);}
+        }
+
+        // fail because of extra tokens
+        let tree = &(bracket_tree!(
+            to[Name, "1"]
+            to[Name, "2"]
+        ).nodes);
+        let expr_wrapped = Expression::parse_name(tree);
+        test_for_error(expr_wrapped, "Expression::parse_name");
+
+        // fail because of empty tree
+        let tree = &(bracket_tree!(
+        ).nodes);
+        let expr_wrapped = Expression::parse_name(tree);
+        test_for_error(expr_wrapped, "Expression::parse_name");
+        
+        // fail because of wrong token
+        let tree = &(bracket_tree!(
+            to[Value, "x"]
+        ).nodes);
+        let expr_wrapped = Expression::parse_name(tree);
+        test_for_error(expr_wrapped, "Expression::parse_name");
+    }
+
+    #[test]
+    fn test_expression_parse_call_arguments(){
+        // success
+        let tree = &(bracket_tree!(
+            to[Name, "x"]
+            to[Operator, ","]
+            to[Name, "y"]
+        ).nodes);
+        let call = Expression::parse_call_arguments(tree).unwrap();
+        match call.as_slice(){
+            &[
+                Expression::Variable(ref x), 
+                Expression::Variable(ref y)
+            ] if x == "x" && y == "y" => {},
+            _ => {
+                panic!("Unexpected result {:?}", call);
+            }
+        }
+        // zero arguments
+        let tree = &(bracket_tree!(
+        ).nodes);
+        let call = Expression::parse_call_arguments(tree).unwrap();
+        match call.as_slice(){
+            &[] => {},
+            _ => {
+                panic!("Unexpected result {:?}", call);
+            }
+        }
+
+        // unexpected ,
+        let tree = &(bracket_tree!(
+            to[Name, "x"]
+            to[Operator, ","]
+            to[Name, "y"]
+            to[Operator, ","]
+        ).nodes);
+        let call = Expression::parse_call_arguments(tree);
+        test_for_error(call, "Expression::parse_from_slice");
+    }
+
+    #[test]
+    fn test_expression_parse_function_call(){
+        // success
+        let tree = &(bracket_tree!(
+            to[Name, "fn"]
+            br(
+                to[Name, "x"]
+            )
+        ).nodes);
+        let fn_call = Expression::parse_function_call(tree).unwrap();
+        match fn_call{
+            Expression::FuncCall(box FuncCall{ref name, ref arguments}) => {
+                assert_eq!(name, "fn");
+                assert_eq!(arguments.as_slice(), &[Expression::Variable("x".to_string())]);
+            },
+            _ => {
+                panic!("Unexpected result: {:?}", fn_call);
+            }
+        }
+        // fail because of wrong first token
+        let tree = &(bracket_tree!(
+            to[Value, "fn"]
+            br(
+                to[Name, "x"]
+            )
+        ).nodes);
+        let call_wrapped = Expression::parse_function_call(tree);
+        test_for_error(call_wrapped, "String::parse");
+
+        // fail because of wrong second token tree
+        let tree = &(bracket_tree!(
+            to[Name, "fn"]
+            to[Name, "rr"]
+            br(
+                to[Name, "x"]
+            )
+        ).nodes);
+        let call_wrapped = Expression::parse_function_call(tree);
+        test_for_error(call_wrapped, "Expression::parse_function_call");
+        
+        let tree = &(bracket_tree!(
+            to[Name, "fn"]
+            br(
+                to[Name, "x"]
+                to[Operator, ","]
+            )
+        ).nodes);
+        let call_wrapped = Expression::parse_function_call(tree);
+        test_for_error(call_wrapped, "Expression::parse_from_slice");
+
+        // fail because of wrong bracket type
+        let tree = &(bracket_tree!(
+            to[Name, "fn"]
+            br{
+                to[Name, "x"]
+            }
+        ).nodes);
+        let call_wrapped = Expression::parse_function_call(tree);
+        test_for_error(call_wrapped, "Expression::parse_function_call");
+    }
+
+    #[test]
+    fn test_expression_parse_operators(){
+        // success
+        let tree = &(bracket_tree!(
+            to[Name, "x"]
+            to[Operator, "++"]
+            to[Operator, "+"]
+            to[Operator, "--"]
+            to[Name, "y"]
+        ).nodes);
+        let expr = Expression::parse_operators(tree).unwrap();
+        match expr{
+            Expression::BinOp(box BinOp{
+                ref op,
+                left: Expression::SyffixOp(box SyffixOp{op: ref s_op, left: Expression::Variable(ref x)}),
+                right: Expression::PrefixOp(box PrefixOp{op: ref p_op, right: Expression::Variable(ref y)})
+            }) => {
+                assert_eq!(op, "+");
+                assert_eq!(s_op, "++");
+                assert_eq!(x, "x");
+                assert_eq!(p_op, "--");
+                assert_eq!(y, "y");
+            },
+            _ => {
+                panic!("Unxepected result: {:?}", expr)
+            }
+        }
+        // success inner
+        let tree = &(bracket_tree!(
+            to[Name, "x"]
+            to[Operator, "*"]
+            br(
+                to[Name, "y"]
+                to[Operator, "+"]
+                to[Name, "z"]
+            )
+        ).nodes);
+        let expr = Expression::parse_operators(tree).unwrap();
+        match expr{
+            Expression::BinOp(box BinOp{
+                ref op,
+                left: Expression::Variable(ref x),
+                right: Expression::BinOp(box BinOp{
+                    op: ref op2,
+                    left: Expression::Variable(ref y),
+                    right: Expression::Variable(ref z)
+                })
+            }) => {
+                assert_eq!(op, "*");
+                assert_eq!(x, "x");
+                assert_eq!(y, "y");
+                assert_eq!(op2, "+");
+                assert_eq!(z, "z");
+
+            },
+            _ => {
+                panic!("Unxepected result: {:?}", expr)
+            }
+        }
+    }
+
+    #[test]
+    fn test_expression_parse_before_separator(){
+        let tree = &(bracket_tree!(
+            to[Name, "x"]
+            to[Operator, ";"]
+            to[Name, "y"]
+        ).nodes);
+        let (expr, tree) = Expression::parse(tree).unwrap();
+        assert_eq!(expr, Expression::Variable("x".to_string()));
+        assert_eq!(tree.len(), 2);
+    }
+
+    #[test]
+    fn test_vardef_parse(){
+        let tree = &(bracket_tree!(
+            to[Name, "int"]
+            to[Name, "x"]
+            to[Operator, "="]
+            to[Name, "y"]
+            to[Operator, ","]
+            to[Name, "z"]
+            to[Operator, "="]
+            to[Value, "2"]
+            to[Operator, ";"]
+        ).nodes);
+
+        let (var_def, tree) = VarDef::parse(tree).unwrap();
+        assert_eq!(tree.len(), 1);
+        assert_eq!(var_def, VarDef{
+            type_: TypeName{
+                base: "int".to_string(),
+                pointer_count: 0
+            },
+            assignments: vec![
+                ("x".to_string(), Expression::Variable("y".to_string())),
+                ("z".to_string(), Expression::Constant("2".to_string()))
+            ]
+        });
+    }
+
+    #[test]
+    fn test_condition_parse(){
+        // success
+        let tree = &(bracket_tree!(
+            to[Name, "if"]
+            br(
+                to[Name, "x"]
+            )
+            to[Name, "y"]
+            to[Operator, ";"]
+        ).nodes);
+
+        let (cond, tree) = Condition::parse(tree).unwrap();
+        assert_eq!(cond, Condition{
+            ifs: vec![(
+                Expression::Variable("x".to_string()), 
+                Block{statements: vec![Statement::Expression(Expression::Variable("y".to_string()))]}
+            )],
+            else_block: None
+        });
+        assert_eq!(tree.len(), 0);
+        
+        // success embedded
+        let tree = &(bracket_tree!(
+            to[Name, "if"]
+            br(
+                to[Name, "x"]
+            )
+            to[Name, "if"]
+            br(
+                to[Name, "x"]
+            )
+            to[Name, "y"]
+            to[Operator, ";"]
+        ).nodes);
+
+        let (cond, tree) = Condition::parse(tree).unwrap();
+        assert_eq!(cond, Condition{
+            ifs: vec![(
+                Expression::Variable("x".to_string()), 
+                Block{statements: vec![Statement::Condition(
+                    Condition{
+                        ifs: vec![(
+                            Expression::Variable("x".to_string()), 
+                            Block{statements: vec![Statement::Expression(Expression::Variable("y".to_string()))]}
+                        )],
+                        else_block: None
+                    }
+                )]}
+            )],
+            else_block: None
+        });
+        assert_eq!(tree.len(), 0);
+
+        // success else
+        let tree = &(bracket_tree!(
+            to[Name, "if"]
+            br(
+                to[Name, "x"]
+            )
+            to[Name, "y"]
+            to[Operator, ";"]
+            to[Name, "else"]
+            to[Name, "z"]
+            to[Operator, ";"]
+        ).nodes);
+        
+        let (cond, tree) = Condition::parse(tree).unwrap();
+        assert_eq!(cond, Condition{
+            ifs: vec![(
+                Expression::Variable("x".to_string()), 
+                Block{statements: vec![Statement::Expression(Expression::Variable("y".to_string()))]}
+            )],
+            else_block: Some(Block{statements: vec![Statement::Expression(Expression::Variable("z".to_string()))]})
+        });
+        assert_eq!(tree.len(), 0);
+    }
+
+    #[test]
+    fn test_forloop_parse(){
+        let tree = &(bracket_tree!(
+            to[Name, "for"]
+            br(
+                to[Name, "int"]
+                to[Name, "x"]
+                to[Operator, "="]
+                to[Name, "y"]
+                to[Operator, ";"]
+                to[Name, "x"]
+                to[Operator, ";"]
+                to[Operator, "--"]
+                to[Name, "x"]
+            )
+            to[Name, "y"]
+            to[Operator, ";"]
+        ).nodes);
+        let (forloop, tree) = ForLoop::parse(tree).unwrap();
+        assert_eq!(forloop, ForLoop{
+            init: ForLoopInit::VarDef(VarDef{
+                type_: TypeName{
+                    base: "int".to_string(),
+                    pointer_count: 0
+                },
+                assignments: vec![
+                    ("x".to_string(), Expression::Variable("y".to_string()))
+                ]
+            }),
+            step: Expression::PrefixOp(Box::new(PrefixOp{
+                op: "--".to_string(),
+                right: Expression::Variable("x".to_string())
+            })),
+            cond: Expression::Variable("x".to_string()),
+            block: Block{
+                statements: vec![
+                    Statement::Expression(Expression::Variable("y".to_string()))
+                ]
+            }
+        });
+        assert_eq!(tree.len(), 0);
+    }
+
+    fn test_for_error<T: Debug>(res: Result<T, ParseError>, expected: &str){
+        match res{
+            Err(ref e) if e.msg.contains(expected) => {},
+            _ => {panic!("Expected error {} but get {:?}", expected, res)}
+        }
     }
 }
