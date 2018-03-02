@@ -2,11 +2,9 @@ use std::fmt::Write;
 
 use cata::parser::brackets::{
     BracketTreeItem as BTI,
-    BracketTree as BT,
-    parse_brackets,
-    BracketParseError
+    BracketTree as BT
 };
-use cata::lexer::{tokenize, Token, TokenData};
+use cata::lexer::{Token, TokenData};
 use cata::parser::parse_operators;
 use cata::parser::parse_items::{
     test_for_operator, 
@@ -16,7 +14,7 @@ use cata::misc::split_by;
 
 
 #[derive(Debug, Eq, PartialEq)]
-struct FunctionDef{
+pub struct FunctionDef{
     ret_type: TypeName,
     name: String,
     arguments: Vec<(TypeName, String)>,
@@ -24,24 +22,24 @@ struct FunctionDef{
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct TypeName{
+pub struct TypeName{
     base: String,
     pointer_count: usize
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct Block{
+pub struct Block{
     statements: Vec<Statement>
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct Operator{
+pub struct Operator{
     name: String
 }
 
 
 #[derive(Debug, Eq, PartialEq)]
-enum Statement{
+pub enum Statement{
     Expression(Expression),
     Condition(Condition),
     ForLoop(ForLoop),
@@ -50,25 +48,27 @@ enum Statement{
 
 
 #[derive(Debug, Eq, PartialEq)]
-enum Expression{
+pub enum Expression{
     FuncCall(Box<FuncCall>),
     BinOp(Box<BinOp>),
     PrefixOp(Box<PrefixOp>),
     SyffixOp(Box<SyffixOp>),
     Variable(String),
-    Constant(String)
+    Constant(String),
+    New(Box<(TypeName, Expression)>),
+    Index(Box<(Expression, Expression)>)
 }
 
 
 #[derive(Debug, Eq, PartialEq)]
-struct VarDef{
+pub struct VarDef{
     type_: TypeName,
     assignments: Vec<(String, Expression)>
 }
 
 
 #[derive(Debug, Eq, PartialEq)]
-struct ForLoop{
+pub struct ForLoop{
     init: ForLoopInit,
     step: Expression,
     cond: Expression,
@@ -77,28 +77,28 @@ struct ForLoop{
 
 
 #[derive(Debug, Eq, PartialEq)]
-enum ForLoopInit{
+pub enum ForLoopInit{
     Expression(Expression),
     VarDef(VarDef)
 }
 
 
 #[derive(Debug, Eq, PartialEq)]
-struct Condition{
+pub struct Condition{
     ifs: Vec<(Expression, Block)>,
     else_block: Option<Block>
 }
 
 
 #[derive(Debug, Eq, PartialEq)]
-struct FuncCall{
+pub struct FuncCall{
     name: String,
     arguments: Vec<Expression>
 }
 
 
 #[derive(Debug, Eq, PartialEq)]
-struct BinOp{
+pub struct BinOp{
     op: String,
     left: Expression,
     right: Expression
@@ -106,21 +106,21 @@ struct BinOp{
 
 
 #[derive(Debug, Eq, PartialEq)]
-struct PrefixOp{
+pub struct PrefixOp{
     op: String,
     right: Expression
 }
 
 
 #[derive(Debug, Eq, PartialEq)]
-struct SyffixOp{
+pub struct SyffixOp{
     op: String,
     left: Expression
 }
 
 
 #[derive(Debug)]
-struct ParseError{
+pub struct ParseError{
     msg: String,
     where_: Option<TokenData>
 }
@@ -464,8 +464,23 @@ impl ParseFromBracketTree for Expression{
 
 
 impl Expression{
-    fn parse_until<'a>(tree: &'a [BTI], stop_operator: &str)->Result<(Self, &'a [BTI]), ParseError>{
+    fn parse_until_predicate<T: Fn(&BTI)->bool>(tree: &[BTI], stop: T)->Result<(Self, &[BTI]), ParseError>{
         // get part of slice from which expression will be parsed
+        let to = tree.iter()
+            .enumerate()
+            .filter(|&(_, a)| stop(a))
+            .next();
+        if let Some(bt) = to{
+            let (expr_tree, tree) = tree.split_at(bt.0);
+            // parse expression
+            let expr = Self::parse_from_slice(expr_tree)?;
+            Ok((expr, tree))
+        }else{
+            Err(parse_error_fmt!("Expression::parse_until_predicate: expected stop not found"))
+        }
+    }
+
+    fn parse_until<'a>(tree: &'a [BTI], stop_operator: &str)->Result<(Self, &'a [BTI]), ParseError>{
         let to = tree.iter()
             .enumerate()
             .filter(|&(_, a)| test_for_operator(a, stop_operator) || test_for_operator(a, ";"))
@@ -490,10 +505,48 @@ impl Expression{
     }
 
     fn parse_from_slice_simple(tree: &[BTI])->Result<Self, ParseError>{
-
         Self::parse_constant(tree)
             .or_else(|_| Self::parse_name(tree))
             .or_else(|_| Self::parse_function_call(tree))
+            .or_else(|_| Self::parse_new(tree))
+            .or_else(|_| Self::parse_index(tree))
+    }
+
+    fn parse_new(tree: &[BTI])->Result<Self, ParseError>{
+        let (new, tree) = String::parse(tree)?;
+        if new == "new"{
+            let (type_, tree) = TypeName::parse(tree)?;
+            match tree{
+                &[BTI::Tree(ref tree)] if check_tree_brackets(tree, "[", "]") => {
+                    let expr = Self::parse_from_slice(&tree.nodes)?;
+                    Ok(Expression::New(Box::new((type_, expr))))
+                },
+                _ => {
+                    Err(parse_error_fmt!("Expression::parse_new: expected [..] but {:?} found", tree))
+                }
+            }
+        }else{
+            Err(parse_error_fmt!("Expression::parse_new: expected 'new' but {:?} found", new))
+        }
+    }
+
+    fn parse_index(tree: &[BTI])->Result<Self, ParseError>{
+        //Err(parse_error_fmt!("Expression::parse_new: expected [..] but {:?} found", tree))
+        let (from, tree) = Self::parse_until_predicate(tree, |a|{
+            match a{
+                &BTI::Tree(ref t) if check_tree_brackets(t, "[", "]") => true,
+                _ => false
+            }
+        })?;
+        match tree{
+            &[BTI::Tree(ref t)] if check_tree_brackets(t, "[", "]") => {
+                let index = Self::parse_from_slice(&t.nodes)?;
+                Ok(Expression::Index(Box::new((from, index))))
+            },
+            _ => {
+                Err(parse_error_fmt!("Expression::parse_new: expected [..] but {:?} found", tree))
+            }
+        }
     }
 
     fn parse_constant(tree: &[BTI])->Result<Self, ParseError>{

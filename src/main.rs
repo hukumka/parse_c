@@ -11,6 +11,7 @@ extern crate derive_error;
 extern crate cata;
 
 mod parse;
+mod build;
 
 use std::fs::File;
 use std::io;
@@ -43,8 +44,6 @@ use cata::parser::parse_items::{
     get_tree
 };
 
-
-use parse;
 
 
 fn main() {
@@ -322,7 +321,7 @@ fn statement_into_string(code: &Statement, use_namespace: bool)->String{
             }
             res
         },
-        &Statement::Sem((ref op_node, len)) => {
+        &Statement::Sem((ref op_node, _len)) => {
             let mut res = String::new();
             if use_namespace{
                 write!(res, "{}", generate_operator_node_function(op_node)).unwrap();
