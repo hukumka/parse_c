@@ -15,26 +15,26 @@ use cata::misc::split_by;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct FunctionDef{
-    ret_type: TypeName,
-    name: String,
-    arguments: Vec<(TypeName, String)>,
-    block: Block
+    pub ret_type: TypeName,
+    pub name: String,
+    pub arguments: Vec<(TypeName, String)>,
+    pub block: Block
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct TypeName{
-    base: String,
-    pointer_count: usize
+    pub base: String,
+    pub pointer_count: usize
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Block{
-    statements: Vec<Statement>
+    pub statements: Vec<Statement>
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Operator{
-    name: String
+    pub name: String
 }
 
 
@@ -43,7 +43,8 @@ pub enum Statement{
     Expression(Expression),
     Condition(Condition),
     ForLoop(ForLoop),
-    VarDef(VarDef)
+    VarDef(VarDef),
+    Return(Expression)
 }
 
 
@@ -62,17 +63,17 @@ pub enum Expression{
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct VarDef{
-    type_: TypeName,
-    assignments: Vec<(String, Expression)>
+    pub type_: TypeName,
+    pub assignments: Vec<(String, Expression)>
 }
 
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct ForLoop{
-    init: ForLoopInit,
-    step: Expression,
-    cond: Expression,
-    block: Block
+    pub init: ForLoopInit,
+    pub step: Expression,
+    pub cond: Expression,
+    pub block: Block
 }
 
 
@@ -85,37 +86,37 @@ pub enum ForLoopInit{
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Condition{
-    ifs: Vec<(Expression, Block)>,
-    else_block: Option<Block>
+    pub ifs: Vec<(Expression, Block)>,
+    pub else_block: Option<Block>
 }
 
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct FuncCall{
-    name: String,
-    arguments: Vec<Expression>
+    pub name: String,
+    pub arguments: Vec<Expression>
 }
 
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct BinOp{
-    op: String,
-    left: Expression,
-    right: Expression
+    pub op: String,
+    pub left: Expression,
+    pub right: Expression
 }
 
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct PrefixOp{
-    op: String,
-    right: Expression
+    pub op: String,
+    pub right: Expression
 }
 
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct SyffixOp{
-    op: String,
-    left: Expression
+    pub op: String,
+    pub left: Expression
 }
 
 
@@ -123,6 +124,22 @@ pub struct SyffixOp{
 pub struct ParseError{
     msg: String,
     where_: Option<TokenData>
+}
+
+
+impl ParseError{
+    fn extend_where(self, where_: Option<TokenData>)->Self{
+        ParseError{msg: self.msg, where_: self.where_.or(where_)}
+    }
+}
+
+trait AddWhereTrait{
+    fn add_where(self, where_: Option<TokenData>)->Self;
+}
+impl<T> AddWhereTrait for Result<T, ParseError>{
+    fn add_where(self, where_: Option<TokenData>)->Self{
+        self.or_else(|x| Err(x.extend_where(where_)))
+    }
 }
 
 macro_rules! parse_error_fmt{
@@ -143,7 +160,7 @@ macro_rules! parse_error_fmt{
 }
 
 
-trait ParseFromBracketTree: Sized{
+pub trait ParseFromBracketTree: Sized{
     fn parse(&[BTI])->Result<(Self, &[BTI]), ParseError>;
 
     fn parse_from_chain<T>(from: Result<(T, &[BTI]), ParseError>)->Result<((Self, T), &[BTI]), ParseError>{
@@ -296,17 +313,26 @@ impl Block{
 
 impl ParseFromBracketTree for Statement{
     fn parse(tree: &[BTI])->Result<(Self, &[BTI]), ParseError>{
+        let initial_tree = tree;
         if tree.is_empty(){
             return Err(parse_error_fmt!("Statement::parse: Expected for if type or expression, but tree is empty"));
         }
         match get_name(&tree[0]){
             Some(ref x) if x == "if" => Condition::parse(tree).map(|(a, b)| (Statement::Condition(a), b)),
             Some(ref x) if x == "for" => ForLoop::parse(tree).map(|(a, b)| (Statement::ForLoop(a), b)),
+            Some(ref x) if x == "return" => {
+                let tree = &tree[1..];
+                let (expr, tree) = Expression::parse(tree).add_where(first_token(initial_tree))?;
+                let (_semicolon, tree) = tree.split_first().ok_or(parse_error_fmt!("Statement::parse: expected ';', but found nothing"))?;
+
+                Ok((Statement::Return(expr), tree))
+            }
             _ => {
                 if let Ok((var_def, rest)) = VarDef::parse(tree){
+                    let (_semicolon, rest) = rest.split_first().ok_or(parse_error_fmt!("Statement::parse: expected ';', but found nothing"))?;
                     Ok((Statement::VarDef(var_def), rest))
                 }else{
-                    let (expr, tree) = Expression::parse(tree)?;
+                    let (expr, tree) = Expression::parse(tree).add_where(first_token(initial_tree))?;
                     let (_semicolon, tree) = tree.split_first().ok_or(parse_error_fmt!("Statement::parse: expected ';', but found nothing"))?;
                     Ok((Statement::Expression(expr), tree))
                 }
@@ -316,8 +342,41 @@ impl ParseFromBracketTree for Statement{
 }
 
 
+fn first_token(tree: &[BTI])->Option<TokenData>{
+    tree.first().and_then(|x| {
+        match x{
+            &BTI::Tree(ref tree) => tree.brackets.clone().map(|a|a.0),
+            &BTI::Token(ref x) => Some(x.clone())
+        }
+    })
+}
+
+
 impl ParseFromBracketTree for Condition{
     fn parse(tree: &[BTI])->Result<(Self, &[BTI]), ParseError>{
+        Self::parse_basic(tree).map(|(mut x, tree)|{
+            x.shrink();
+            (x, tree)
+        })
+    }
+}
+
+impl Condition{
+    fn shrink(&mut self){
+        let mut e = self.else_block.take();
+        if let Some(ref mut e) = e{
+            if e.statements.len() == 1{
+                if let Statement::Condition(ref mut x) = e.statements[0]{
+                    self.ifs.append(&mut x.ifs);
+                    self.else_block = x.else_block.take();
+                    return;
+                }
+            }
+        }
+        self.else_block = e;
+    }
+
+    fn parse_basic(tree: &[BTI])->Result<(Self, &[BTI]), ParseError>{
         // condition consist of 
         // name(if) expr(*) (block(*)|statement(*)) [name(else) (block(*)|statement(*))]
         let (if_token, tree) = tree.split_first()
@@ -464,22 +523,6 @@ impl ParseFromBracketTree for Expression{
 
 
 impl Expression{
-    fn parse_until_predicate<T: Fn(&BTI)->bool>(tree: &[BTI], stop: T)->Result<(Self, &[BTI]), ParseError>{
-        // get part of slice from which expression will be parsed
-        let to = tree.iter()
-            .enumerate()
-            .filter(|&(_, a)| stop(a))
-            .next();
-        if let Some(bt) = to{
-            let (expr_tree, tree) = tree.split_at(bt.0);
-            // parse expression
-            let expr = Self::parse_from_slice(expr_tree)?;
-            Ok((expr, tree))
-        }else{
-            Err(parse_error_fmt!("Expression::parse_until_predicate: expected stop not found"))
-        }
-    }
-
     fn parse_until<'a>(tree: &'a [BTI], stop_operator: &str)->Result<(Self, &'a [BTI]), ParseError>{
         let to = tree.iter()
             .enumerate()
@@ -499,17 +542,13 @@ impl Expression{
         if tree.is_empty(){
             Err(parse_error_fmt!("Expression::parse_from_slice: trying to parse empty expression"))
         }else{
-            Self::parse_from_slice_simple(tree)
+            Self::parse_constant(tree)
+                .or_else(|_| Self::parse_name(tree))
+                .or_else(|_| Self::parse_function_call(tree))
+                .or_else(|_| Self::parse_new(tree))
                 .or_else(|_| Self::parse_operators(tree))
+                .or_else(|_| Self::parse_index(tree))
         }
-    }
-
-    fn parse_from_slice_simple(tree: &[BTI])->Result<Self, ParseError>{
-        Self::parse_constant(tree)
-            .or_else(|_| Self::parse_name(tree))
-            .or_else(|_| Self::parse_function_call(tree))
-            .or_else(|_| Self::parse_new(tree))
-            .or_else(|_| Self::parse_index(tree))
     }
 
     fn parse_new(tree: &[BTI])->Result<Self, ParseError>{
@@ -531,21 +570,16 @@ impl Expression{
     }
 
     fn parse_index(tree: &[BTI])->Result<Self, ParseError>{
-        //Err(parse_error_fmt!("Expression::parse_new: expected [..] but {:?} found", tree))
-        let (from, tree) = Self::parse_until_predicate(tree, |a|{
-            match a{
-                &BTI::Tree(ref t) if check_tree_brackets(t, "[", "]") => true,
-                _ => false
-            }
-        })?;
-        match tree{
-            &[BTI::Tree(ref t)] if check_tree_brackets(t, "[", "]") => {
-                let index = Self::parse_from_slice(&t.nodes)?;
+        if let Some((&BTI::Tree(ref t), from)) = tree.split_last(){
+            if check_tree_brackets(t, "[", "]"){
+                let from = Expression::parse_from_slice(from).add_where(t.brackets.clone().map(|a|a.1))?;
+                let index = Expression::parse_from_slice(&t.nodes).add_where(t.brackets.clone().map(|a|a.1))?;
                 Ok(Expression::Index(Box::new((from, index))))
-            },
-            _ => {
-                Err(parse_error_fmt!("Expression::parse_new: expected [..] but {:?} found", tree))
+            }else{
+                Err(parse_error_fmt!("Expression::parse_new: expected [..] but {:?} found", t))
             }
+        }else{
+            Err(parse_error_fmt!("Expression::parse_new: expected [..] but nothing found"))
         }
     }
 
@@ -600,7 +634,6 @@ impl Expression{
         }else{
             loop{
                 let (arg, tr) = Expression::parse_until(tree, ",")?;
-                println!("{:?}", tr);
                 args.push(arg);
                 if tr.len() == 0{
                     break;
@@ -655,7 +688,7 @@ impl Expression{
                     &[BTI::Tree(ref tree)] if check_tree_brackets(&tree, "(", ")")  => {
                         Expression::parse_from_slice(&tree.nodes)
                     }
-                    _ => Expression::parse_from_slice_simple(tree)
+                    _ => Expression::parse_from_slice(tree)
                 }
                 
             }
@@ -690,6 +723,11 @@ mod tests{
         BracketTree, 
         BracketTreeItem
     };
+
+    #[test]
+    fn test_block_parse(){
+
+    }
 
     #[test]
     fn test_name_parse(){
@@ -1017,6 +1055,90 @@ mod tests{
                 assert_eq!(op2, "+");
                 assert_eq!(z, "z");
 
+            },
+            _ => {
+                panic!("Unxepected result: {:?}", expr)
+            }
+        }
+        // success new
+        let tree = &(bracket_tree!(
+            to[Name, "new"]
+            to[Name, "int"]
+            to[Operator, "**"]
+            to[Operator, "*"]
+            br[
+                to[Value, "10"]
+            ]
+            to[Operator, ";"]
+        ).nodes);
+        let (expr, tree) = Expression::parse(tree).unwrap();
+        match expr{
+            Expression::New(box (
+                ref type_, 
+                Expression::Constant(ref s)
+            )) => {
+                assert_eq!(s, "10");
+                assert_eq!(type_.base, "int");
+                assert_eq!(type_.pointer_count, 3);
+            },
+            _ => {
+                panic!("Unxepected result: {:?}", expr)
+            }
+        }
+        assert_eq!(tree.len(), 1);
+        // success index
+        let tree = &(bracket_tree!(
+            to[Name, "x"]
+            br[
+                to[Value, "10"]
+            ]
+            br[
+                to[Value, "12"]
+            ]
+            to[Operator, ";"]
+        ).nodes);
+        let (expr, tree) = Expression::parse(tree).unwrap();
+        assert_eq!(tree.len(), 1);
+        match expr{
+            Expression::Index(box (
+                Expression::Index(box (
+                    Expression::Variable(ref x),
+                    Expression::Constant(ref ten)
+                )),
+                Expression::Constant(ref twelve)
+            )) => {
+                assert_eq!(x, "x");
+                assert_eq!(ten, "10");
+                assert_eq!(twelve, "12");
+            },
+            _ => {
+                panic!("Unxepected result: {:?}", expr)
+            }
+        }
+        let tree = &(bracket_tree!(
+            to[Name, "x"]
+            to[Operator, "+"]
+            to[Name, "y"]
+            br[
+                to[Value, "10"]
+            ]
+            to[Operator, ";"]
+        ).nodes);
+        let (expr, tree) = Expression::parse(tree).unwrap();
+        assert_eq!(tree.len(), 1);
+        match expr{
+            Expression::BinOp(box BinOp{
+                ref op,
+                left: Expression::Variable(ref x),
+                right: Expression::Index(box (
+                    Expression::Variable(ref y),
+                    Expression::Constant(ref ten)
+                )),
+            }) => {
+                assert_eq!(op, "+");
+                assert_eq!(x, "x");
+                assert_eq!(y, "y");
+                assert_eq!(ten, "10");
             },
             _ => {
                 panic!("Unxepected result: {:?}", expr)

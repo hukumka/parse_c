@@ -1,0 +1,59 @@
+<head>
+	<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+	<script type="text/javascript" src="vm.js"></script>
+	<script type="text/javascript" src="js0.js"></script>
+
+<style>
+table.code-line-holder{
+    font-family: monospace;
+    font-size: 15px;
+}
+td.cpp-line-number{
+    padding: 0.2em;
+    margin-right: 0.7em;
+    color: grey;
+}
+tr.cpp-line{
+}
+td.current{
+    color: red;
+    font-weight: bold;
+}
+span.cpp-type{
+    color: green;
+}
+span.cpp-tab{
+    width: 1.8em;
+    display: inline-block;
+}
+span.cpp-constant{
+    color: darkblue;
+}
+span.cpp-function-name{
+    color: teal;
+}
+span.cpp-keyword{
+    color: darkorange;
+}
+</style>
+</head>
+
+<body>
+	<script type="text/javascript" >
+        var sqrt = {get: function(namespace_holder, arg){
+            return {value: Math.sqrt(arg[0].value),type: new Type("float", 0)};
+        }}
+
+        var code = new CodeLineHolder();
+        var namespace_holder = new NamespaceHolder();
+        namespace_holder.globals.define("x", new Type("int", 0), 1);
+        namespace_holder.globals.define("sqrt", new Type("(Fn(float)->float)", 0), sqrt);
+        block.create_lines(code);
+        code.create_view();
+        document.body.appendChild(code.view);
+	</script>
+    <div>
+        <span onclick="block.step(namespace_holder); code.highlight(block.get_current_line());namespace_holder.log();">step</span>
+    </div>
+</body>
+

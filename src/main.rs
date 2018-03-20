@@ -45,6 +45,9 @@ use cata::parser::parse_items::{
 };
 
 
+use parse::{FunctionDef, ParseFromBracketTree};
+use build::{BuildJs, Formatable};
+
 
 fn main() {
     /*let tree = get_bracket_tree("/home/hukumka/0/diplodoc/test1.cpp").unwrap();
@@ -60,23 +63,26 @@ fn main() {
 
     let mut out = String::new();
     generate_js(&contents, &mut out).unwrap();
-    println!("var block = {}", out);
+    println!("var block = {};", out);
 }
 
 
 fn generate_js<T: fmt::Write>(c_code: &str, formatter: &mut T)->fmt::Result{
     // skip includes
     let skip_includes: Vec<_> = c_code.split("\n").filter(|x| !x.starts_with("#")).collect();
-    let skip = &skip_includes.join(" ");
+    let skip = &skip_includes.join("\n");
     // build tree
     let tokens = tokenize(&skip);
-let tree = parse_brackets(tokens).unwrap();
-// parse functions
-    let functions: Vec<_> = tree.nodes.chunks(4).map(|x| parse_function_def(x).unwrap()).collect();
+    let tree = parse_brackets(tokens).unwrap();
+    let (func_def, tree) = FunctionDef::parse(&tree.nodes).unwrap();
+    write!(formatter, "{}", Formatable::new(&|f| func_def.write(f)))
+
+    // parse functions
+    /*let functions: Vec<_> = tree.nodes.chunks(4).map(|x| parse_function_def(x).unwrap()).collect();
 
     write!(formatter, "{}", generate_function_js(&functions[0]).unwrap())?;
     Ok(())
-    //panic!();
+    //panic!();*/
 }
 
 fn generate_function_js(func: &Function)->Result<String, String>{
