@@ -254,6 +254,9 @@ impl ParseFromBracketTree for Operator{
 fn parse_arguments(t: &[BTI])->Result<(Vec<(TypeName, String)>, &[BTI]), ParseError>{
     if let Some((tree, rest)) = t.split_first(){
         if let &BTI::Tree(ref tree) = tree{
+            if tree.nodes.is_empty(){
+                return Ok((vec![], rest));
+            }
             let args_iter = split_by(&tree.nodes, |x| test_for_operator(x, ","))
                 .map(|arg_tree| {
                     let (type_, arg_tree) = TypeName::parse(arg_tree)?;

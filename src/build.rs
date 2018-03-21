@@ -8,7 +8,6 @@ use parse::{
     Statement,
     Expression,
     Condition,
-    ForLoop,
     ForLoopInit,
     VarDef
 };

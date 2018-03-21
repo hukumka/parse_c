@@ -46,9 +46,25 @@ span.cpp-keyword{
 
         var code = new CodeLineHolder();
         var namespace_holder = new NamespaceHolder();
-        namespace_holder.globals.define("x", new Type("int", 0), 1);
         namespace_holder.globals.define("sqrt", new Type("(Fn(float)->float)", 0), sqrt);
-        block.create_lines(code);
+        //namespace_holder.globals.define("x", new Type("int", 0), 20);
+        
+        namespace_holder.pop(); // enter globals
+        for(var i=0; i<globals.length; ++i){
+            globals[i].get(namespace_holder);
+        }
+        namespace_holder.push();
+        for(var fn in functions){
+            namespace_holder.globals.define(fn, new Type("(Fn)", 0), functions[fn]);
+        }
+        
+        for(var i in globals){
+            globals[i].create_lines(code);
+        }
+        for(var i in functions){
+            functions[i].create_lines(code);
+        }
+        block = functions["main"];
         code.create_view();
         document.body.appendChild(code.view);
 	</script>

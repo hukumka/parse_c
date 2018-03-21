@@ -53,6 +53,7 @@ function NamespaceHolder(globals){
         this.globals = globals;
     }
 	this.namespace = new Namespace(this.globals);
+    this.function_stack = [];
 	this.push = function(){
 		this.namespace = new Namespace(this.namespace);
 	};
@@ -62,6 +63,13 @@ function NamespaceHolder(globals){
 	this.log = function(){
 		this.namespace.log();
 	}
+    this.function_call = function(){
+        this.function_stack.push(this.namespace);
+        this.namespace = new Namespace(this.globals);
+    }
+    this.function_ret = function(){
+        this.namespace = this.function_stack.pop();
+    }
 }
 
 
@@ -72,7 +80,7 @@ function CodeLineHolder(){
 
     this.create_view = function(){
         this.view = document.createElement("table");
-        this.view.setAttribute("class", "code-line-holder");
+    this.view.setAttribute("class", "code-line-holder");
         for(var i=0; i<this.lines.length; ++i){
             var l = this.lines[i];
             this.view.appendChild(l.view);
@@ -181,14 +189,16 @@ function FunctionDef(ret_type, name, args, body){
                 throw "Function '" + this.name + "' require " + this.args.length + " arguments, but only " + args.length + " supplied.";
             }
             for(var i=0; i<args.length; ++i){
-                namespace_holder.namespace.define(this.args[i].name, this.args[i].type, args[i]);
+                namespace_holder.namespace.define(this.args[i].name, this.args[i].type, args[i].value);
             }
+            namespace_holder.log();
             var result = this.body.get(namespace_holder);
             namespace_holder.pop();
         }catch(err){
             if("result" in err){
-                this.result = err.result;
-                return true;
+                return err.result;
+            }else{
+                throw err;
             }
         }
     }
@@ -247,7 +257,7 @@ function CppBody(statements){
 
     this.get = function(namespace_holder){
         for(var i=0; i<this.statements.length; ++i){
-            this.statements.get(namespace_holder);
+            this.statements[i].get(namespace_holder);
         }
     }
 
@@ -336,10 +346,13 @@ function ExpressionFuncCall(name, args){
     this.args = args;
 
     this.get = function(namespace_holder){
-        var new_holder = new NamespaceHolder(namespace_holder.globals);
+        var fn = namespace_holder.namespace.get(this.name).value;
         var args = this.args.map(function(x){return x.get(namespace_holder);})
             .map(function(x){return {value: x.value, type: x.type};}); // shallow dereference
-        return namespace_holder.namespace.get(this.name).value.get(new_holder, args);
+        namespace_holder.function_call();
+        var res = fn.get(namespace_holder, args);
+        namespace_holder.function_ret();
+        return res;
     }
 
     this.create_view = function(){
@@ -410,263 +423,264 @@ function get_operator_level(op){
         ["||"],
         ["=", "+=", "*=", "%=", "-=", "/="],
         [","]
-];
-for(var i=0; i<operators.length; ++i){
-    if(operators[i].includes(op)){
-        return i;
+    ];
+    for(var i=0; i<operators.length; ++i){
+        if(operators[i].includes(op)){
+            return i;
+        }
     }
-}
-return -1;
+    return -1;
 }
 
 
 function ExpressionBinOp(op, left, rigth){
-this.op = op;
-this.left = left;
-this.right = rigth;
-
-this.get = function(namespace_holder){
-    var left = this.left.get(namespace_holder);
-    var right = this.right.get(namespace_holder);
-    var type = new Type("int", 0);
-    if(left.type.test("float") || right.type.test("float")){
-        type.name = "float";
-    }
-    if(this.op == "*"){
-        return {value: left.value * right.value, type: type};
-    }else if(this.op == "/"){
-        if(type.test("int")){
-            return {value: Math.floor(left.value / right.value), type: type};
-        }else{
-            return {value: left.value / right.value, type: type};
-        }
-    }else if(this.op == "%"){
-        return {value: left.value % right.value, type: type};
-    }else if(this.op == "+"){
-        return {value: left.value + right.value, type: type};
-    }else if(this.op == "-"){
-        return {value: left.value - right.value, type: type};
-    }else if(this.op == "<="){
-        return {value: left.value <= right.value, type: new Type("bool", 0)};
-    }else if(this.op == "<"){
-        return {value: left.value < right.value, type: new Type("bool", 0)};
-    }else if(this.op == ">="){
-        return {value: left.value >= right.value, type: new Type("bool", 0)};
-    }else if(this.op == ">"){
-        return {value: left.value > right.value, type: new Type("bool", 0)};
-    }else if(this.op == "=="){
-        return {value: left.value == right.value, type: new Type("bool", 0)};
-    }else if(this.op == "!="){
-        return {value: left.value != right.value, type: new Type("bool", 0)};
-    }else if(this.op == "&&"){
-        return {value: left.value && right.value, type: new Type("bool", 0)};
-    }else if(this.op == "||"){
-        return {value: left.value || right.value, type: new Type("bool", 0)};
-    }else if(this.op == "="){
-        var ref = left.reference;
-        if(left.type.test("int")){
-            left.value = Math.floor(right.value);
-        }else{
-            left.value = right.value;
-        }
-        return left;
-    }else if(this.op == "+="){
-        var ref = left.reference;
-        if(left.type.test("int")){
-            left.value = Math.floor(left.value + right.value);
-        }else{
-            left.value = left.value + right.value;
-        }
-        return left;
-    }else if(this.op == "-="){
-        var ref = left.reference;
-        if(left.type.test("int")){
-            left.value = Math.floor(left.value - right.value);
-        }else{
-            left.value = left.value - right.value;
-        }
-        return left;
-    }else if(this.op == "/="){
-        var ref = left.reference;
-        if(left.type.test("int")){
-            left.value = Math.floor(left.value / right.value);
-        }else{
-            left.value = left.value / right.value;
-        }
-        return left;
-    }else if(this.op == "%="){
-        var ref = left.reference;
-        ref.namespace.set(ref.name, left.value - right.value);
-        if(left.type.test("int")){
-            left.value = Math.floor(left.value % right.value);
-        }else{
-            left.value = left.value % right.value;
-        }
-        return left;
-    }else if(this.op == "*="){
-        if(left.type.test("int")){
-            left.value = Math.floor(left.value * right.value);
-        }else{
-            left.value = left.value * right.value;
-        }
-        return left;
-    }else if(this.op == ","){
-        return right;
-    }
-}
-
-this.create_view = function(prev_operator){
-    this.view = document.createElement("span");
-    var need_par = false;
-    if(prev_operator !== undefined){
-        var op_level = get_operator_level(this.op);
-        var prev_level = get_operator_level(prev_operator);
-        if(op_level > prev_level || op_level == -1 || prev_level == -1){
-            need_par = true;
-        }
-    }
-
-    if(need_par){
-        this.view.appendChild(document.createTextNode("("));
-    }
-    this.view.appendChild(this.left.create_view(this.op));
-    this.view.appendChild(document.createTextNode(" " + this.op + " "));
-    this.view.appendChild(this.right.create_view(this.op));
-    if(need_par){
-        this.view.appendChild(document.createTextNode(")"));
-    }
-    return this.view;
-}
+	this.op = op;
+	this.left = left;
+	this.right = rigth;
+	
+	this.get = function(namespace_holder){
+	    var left = this.left.get(namespace_holder);
+	    var right = this.right.get(namespace_holder);
+	    var type = new Type("int", 0);
+	    if(left.type.test("float") || right.type.test("float")){
+	        type.name = "float";
+	    }
+	    if(this.op == "*"){
+	        return {value: left.value * right.value, type: type};
+	    }else if(this.op == "/"){
+	        if(type.test("int")){
+	            return {value: Math.floor(left.value / right.value), type: type};
+	        }else{
+	            return {value: left.value / right.value, type: type};
+	        }
+	    }else if(this.op == "%"){
+	        return {value: left.value % right.value, type: type};
+	    }else if(this.op == "+"){
+	        return {value: left.value + right.value, type: type};
+	    }else if(this.op == "-"){
+	        return {value: left.value - right.value, type: type};
+	    }else if(this.op == "<="){
+	        return {value: left.value <= right.value, type: new Type("bool", 0)};
+	    }else if(this.op == "<"){
+	        return {value: left.value < right.value, type: new Type("bool", 0)};
+	    }else if(this.op == ">="){
+	        return {value: left.value >= right.value, type: new Type("bool", 0)};
+	    }else if(this.op == ">"){
+	        return {value: left.value > right.value, type: new Type("bool", 0)};
+	    }else if(this.op == "=="){
+	        return {value: left.value == right.value, type: new Type("bool", 0)};
+	    }else if(this.op == "!="){
+	        return {value: left.value != right.value, type: new Type("bool", 0)};
+	    }else if(this.op == "&&"){
+	        return {value: left.value && right.value, type: new Type("bool", 0)};
+	    }else if(this.op == "||"){
+	        return {value: left.value || right.value, type: new Type("bool", 0)};
+	    }else if(this.op == "="){
+	        var ref = left.reference;
+	        if(left.type.test("int")){
+	            left.value = Math.floor(right.value);
+	        }else{
+	            left.value = right.value;
+	        }
+	        return left;
+	    }else if(this.op == "+="){
+	        var ref = left.reference;
+	        if(left.type.test("int")){
+	            left.value = Math.floor(left.value + right.value);
+	        }else{
+	            left.value = left.value + right.value;
+	        }
+	        return left;
+	    }else if(this.op == "-="){
+            console.log(left, this.right);
+	        var ref = left.reference;
+	        if(left.type.test("int")){
+	            left.value = Math.floor(left.value - right.value);
+	        }else{
+	            left.value = left.value - right.value;
+	        }
+	        return left;
+	    }else if(this.op == "/="){
+	        var ref = left.reference;
+	        if(left.type.test("int")){
+	            left.value = Math.floor(left.value / right.value);
+	        }else{
+	            left.value = left.value / right.value;
+	        }
+	        return left;
+	    }else if(this.op == "%="){
+	        var ref = left.reference;
+	        ref.namespace.set(ref.name, left.value - right.value);
+	        if(left.type.test("int")){
+	            left.value = Math.floor(left.value % right.value);
+	        }else{
+	            left.value = left.value % right.value;
+	        }
+	        return left;
+	    }else if(this.op == "*="){
+	        if(left.type.test("int")){
+	            left.value = Math.floor(left.value * right.value);
+	        }else{
+	            left.value = left.value * right.value;
+	        }
+	        return left;
+	    }else if(this.op == ","){
+	        return right;
+	    }
+	}
+	
+	this.create_view = function(prev_operator){
+	    this.view = document.createElement("span");
+	    var need_par = false;
+	    if(prev_operator !== undefined){
+	        var op_level = get_operator_level(this.op);
+	        var prev_level = get_operator_level(prev_operator);
+	        if(op_level > prev_level || op_level == -1 || prev_level == -1){
+	            need_par = true;
+	        }
+	    }
+	
+	    if(need_par){
+	        this.view.appendChild(document.createTextNode("("));
+	    }
+	    this.view.appendChild(this.left.create_view(this.op));
+	    this.view.appendChild(document.createTextNode(" " + this.op + " "));
+	    this.view.appendChild(this.right.create_view(this.op));
+	    if(need_par){
+	        this.view.appendChild(document.createTextNode(")"));
+	    }
+	    return this.view;
+	}
 }
 
 
 function ExpressionPrefixOp(op, right, need_par){
-this.op = op;
-this.right = right;
-
-if(need_par === undefined){
-    need_par = false;
-}
-this.need_par = need_par;
-
-this.get = function(namespace_holder){
-    if(this.op == "++"){
-        var val = this.right.get(namespace_holder);
-        val.value += 1;
-        return val;
-    }else if(this.op == "--"){
-        var val = this.right.get(namespace_holder);
-        val.value -= 1;
-        return val;
-    }else if(this.op == "!"){
-        var val = this.right.get(namespace_holder);
-        return {value: !val.value, type: new Type("bool", 0)};
-    }
-}
-
-this.create_view = function(){
-    this.view = document.createElement("span");
-    if(this.need_par){
-        this.view.appendChild(document.createTextNode("("));
-    }
-    this.view.appendChild(document.createTextNode(this.op));
-    this.view.appendChild(this.right.create_view(this.op));
-    if(this.need_par){
-        this.view.appendChild(document.createTextNode(")"));
-    }
-    return this.view;
-}
+	this.op = op;
+	this.right = right;
+	
+	if(need_par === undefined){
+	    need_par = false;
+	}
+	this.need_par = need_par;
+	
+	this.get = function(namespace_holder){
+	    if(this.op == "++"){
+	        var val = this.right.get(namespace_holder);
+	        val.value += 1;
+	        return val;
+	    }else if(this.op == "--"){
+	        var val = this.right.get(namespace_holder);
+	        val.value -= 1;
+	        return val;
+	    }else if(this.op == "!"){
+	        var val = this.right.get(namespace_holder);
+	        return {value: !val.value, type: new Type("bool", 0)};
+	    }
+	}
+	
+	this.create_view = function(){
+	    this.view = document.createElement("span");
+	    if(this.need_par){
+	        this.view.appendChild(document.createTextNode("("));
+	    }
+	    this.view.appendChild(document.createTextNode(this.op));
+	    this.view.appendChild(this.right.create_view(this.op));
+	    if(this.need_par){
+	        this.view.appendChild(document.createTextNode(")"));
+	    }
+	    return this.view;
+	}
 
 }
 
 
 function ExpressionSyffixOp(op, left, need_par){
-this.op = op;
-this.left = left;
-
-if(need_par === undefined){
-    need_par = false;
-}
-this.need_par = need_par;
-
-this.get = function(namespace_holder){
-    if(this.op == "--"){
-        var val = this.left.get(namespace_holder);
-        var res = {value: val.value, type: val.type};
-        val.value -= 1;
-        return res;
-    }if(this.op == "++"){
-        var val = this.left.get(namespace_holder);
-        var res = {value: val.value, type: val.type};
-        val.value -= 1;
-        return res;
-    }
-}
-
-this.create_view = function(){
-    this.view = document.createElement("span");
-    if(this.need_par){
-        this.view.appendChild(document.createTextNode("("));
-    }
-    this.view.appendChild(this.left.create_view(this.op));
-    this.view.appendChild(document.createTextNode(this.op));
-    if(this.need_par){
-        this.view.appendChild(document.createTextNode(")"));
-    }
-    return this.view;
-}
+	this.op = op;
+	this.left = left;
+	
+	if(need_par === undefined){
+	    need_par = false;
+	}
+	this.need_par = need_par;
+	
+	this.get = function(namespace_holder){
+	    if(this.op == "--"){
+	        var val = this.left.get(namespace_holder);
+	        var res = {value: val.value, type: val.type};
+	        val.value -= 1;
+	        return res;
+	    }if(this.op == "++"){
+	        var val = this.left.get(namespace_holder);
+	        var res = {value: val.value, type: val.type};
+	        val.value -= 1;
+	        return res;
+	    }
+	}
+	
+	this.create_view = function(){
+	    this.view = document.createElement("span");
+	    if(this.need_par){
+	        this.view.appendChild(document.createTextNode("("));
+	    }
+	    this.view.appendChild(this.left.create_view(this.op));
+	    this.view.appendChild(document.createTextNode(this.op));
+	    if(this.need_par){
+	        this.view.appendChild(document.createTextNode(")"));
+	    }
+	    return this.view;
+	}
 }
 
 
 function ExpressionNew(type, size){
-this.type = type;
-this.size = size;
-
-this.get = function(namespace_holder){
-    var res = {value: [], type: new Type(this.type.name, this.type.pointer_count+1)};
-    var size = this.size.get(namespace_holder);
-    if(!size.type.test("int")){
-        throw "Size must be integer";
-    }
-    for(var i=0; i<size.value; ++i){
-        res.value[i] = {value: undefined, type: this.type};
-    }
-    return res;
-}
-
-this.create_view = function(){
-    this.view = document.createElement("span");
-    var kw_new = document.createElement("span");
-    kw_new.setAttribute("class", "cpp-keyword");
-    kw_new.appendChild(document.createTextNode("new "));
-    this.view.appendChild(kw_new);
-    this.view.appendChild(this.type.create_view());
-    this.view.appendChild(document.createTextNode("["));
-    this.view.appendChild(this.size.create_view());
-    this.view.appendChild(document.createTextNode("]"));
-    return this.view;
-}
+	this.type = type;
+	this.size = size;
+	
+	this.get = function(namespace_holder){
+	    var res = {value: [], type: new Type(this.type.name, this.type.pointer_count+1)};
+	    var size = this.size.get(namespace_holder);
+	    if(!size.type.test("int")){
+	        throw "Size must be integer";
+	    }
+	    for(var i=0; i<size.value; ++i){
+	        res.value[i] = {value: undefined, type: this.type};
+	    }
+	    return res;
+	}
+	
+	this.create_view = function(){
+	    this.view = document.createElement("span");
+	    var kw_new = document.createElement("span");
+	    kw_new.setAttribute("class", "cpp-keyword");
+	    kw_new.appendChild(document.createTextNode("new "));
+	    this.view.appendChild(kw_new);
+	    this.view.appendChild(this.type.create_view());
+	    this.view.appendChild(document.createTextNode("["));
+	    this.view.appendChild(this.size.create_view());
+	    this.view.appendChild(document.createTextNode("]"));
+	    return this.view;
+	}
 }
 
 
 function ExpressionIndex(from, index){
-this.from = from;
-this.index = index;
-
-this.get = function(namespace_holder){
-    var from = this.from.get(namespace_holder);
-    var index = this.index.get(namespace_holder);
-    return from.value[index.value];
-}
-
-this.create_view = function(){
-    this.view = document.createElement("span");
-    this.view.appendChild(this.from.create_view());
-    this.view.appendChild(document.createTextNode("["));
-    this.view.appendChild(this.index.create_view());
-    this.view.appendChild(document.createTextNode("]"));
-    return this.view;
-}
+	this.from = from;
+	this.index = index;
+	
+	this.get = function(namespace_holder){
+	    var from = this.from.get(namespace_holder);
+	    var index = this.index.get(namespace_holder);
+	    return from.value[index.value];
+	}
+	
+	this.create_view = function(){
+	    this.view = document.createElement("span");
+	    this.view.appendChild(this.from.create_view());
+	    this.view.appendChild(document.createTextNode("["));
+	    this.view.appendChild(this.index.create_view());
+	    this.view.appendChild(document.createTextNode("]"));
+	    return this.view;
+	}
 }
 
 
@@ -795,6 +809,16 @@ function StatementForLoop(init, step, cond, block){
     this.block = block;
 
     this.state = undefined;
+
+    this.get = function(namespace_holder){
+        namespace_holder.push();
+        this.init.get(namespace_holder);
+        while(this.cond.get(namespace_holder).value){
+            this.block.get(namespace_holder);
+            this.step_act.get(namespace_holder);
+        }
+        namespace_holder.pop();
+    }
 
     this.step = function(namespace_holder){
         if(this.state === undefined){
