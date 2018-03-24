@@ -2,61 +2,133 @@
 	<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
 	<script type="text/javascript" src="vm.js"></script>
 	<script type="text/javascript" src="js0.js"></script>
+    <link rel="stylesheet" type="text/css" href="cpp.css">
 
-<style>
-table.code-line-holder{
-    font-family: monospace;
-    font-size: 15px;
-}
-td.cpp-line-number{
-    padding: 0.2em;
-    margin-right: 0.7em;
-    color: grey;
-}
-tr.cpp-line{
-}
-td.current{
-    color: red;
-    font-weight: bold;
-}
-span.cpp-type{
-    color: green;
-}
-span.cpp-tab{
-    width: 1.8em;
-    display: inline-block;
-}
-span.cpp-constant{
-    color: darkblue;
-}
-span.cpp-function-name{
-    color: teal;
-}
-span.cpp-keyword{
-    color: darkorange;
-}
-</style>
+    <style>
+        #page td{
+            margin: 0px;
+            padding: 0px;
+        }
+        #page{
+            border-collapse: collapse;
+        }
+        body{
+            margin: 0px;
+        }
+        #code{
+            overflow: auto;
+            height: 100vh;
+            width: 80vw;
+        }
+        #controller{
+            background-color: lightblue;
+            height: 100vh;
+            width: 20vw;
+            overflow: auto;
+            text-align: center;
+        }
+
+        #variables-view{
+            text-align: left;
+            font-family: monospace;
+            font-size: 15px;
+            margin-right: 0.15em;
+            background-color: white;
+            white-space: nowrap;
+            overflow: auto;
+            height: 90vh;
+        }
+
+        #step-bnt{
+            margin: 0.3em;
+            width: 1.5em;
+            height: 1.5em;
+            background-size: 1.5em;
+            background-image: url("step.png");
+            display: inline-block;
+        }
+
+        #step-into-bnt{
+            margin: 0.3em;
+            width: 1.5em;
+            height: 1.5em;
+            background-size: 1.5em;
+            background-image: url("step-into.png");
+            display: inline-block;
+        }
+        
+        #continue-bnt{
+            margin: 0.3em;
+            width: 1.5em;
+            height: 1.5em;
+            background-size: 1.5em;
+            background-image: url("continue.png");
+            display: inline-block;
+        }
+
+    </style>
 </head>
 
+
 <body>
-	<script type="text/javascript" >
+    <table id="page">
+    <tr>
+    <td>
+        <div id="controller">
+            <span title="step" onclick="step()" id="step-bnt"></span>
+            <span title="step into" onclick="step_into()" id="step-into-bnt"></span>
+            <span title="continue" onclick="continue_()" id="continue-bnt"></span>
+            <div id="variables-view"></div>
+        </div>
+    </td>
+    <td>
+        <div id="code">
+        </div>
+    </td>
+    <tr>
+    </table>
+    <div id=afterline></div>
+	<script type="text/javascript">
+
+        function review_data(){
+            code.highlight(controller.get_current_line());
+            document.getElementById("variables-view").innerHTML = controller.namespace_holder.get_display_html();
+        }
+
+        function step(){
+            controller.step();
+            review_data();
+        }
+
+        function step_into(){
+            controller.step_into();
+            review_data();
+        }
+
+        function continue_(){
+            controller.continue_();
+            review_data();
+        }
         var sqrt = {get: function(namespace_holder, arg){
             return {value: Math.sqrt(arg[0].value),type: new Type("float", 0)};
         }}
 
         var code = new CodeLineHolder();
-        var namespace_holder = new NamespaceHolder();
-        namespace_holder.globals.define("sqrt", new Type("(Fn(float)->float)", 0), sqrt);
-        //namespace_holder.globals.define("x", new Type("int", 0), 20);
         
-        namespace_holder.pop(); // enter globals
-        for(var i=0; i<globals.length; ++i){
-            globals[i].get(namespace_holder);
-        }
-        namespace_holder.push();
-        for(var fn in functions){
-            namespace_holder.globals.define(fn, new Type("(Fn)", 0), functions[fn]);
-        }
+        var controller = new Controller();
+
+        this.code.clicked = function(line){
+            if(controller.is_breakpoint(line)){
+                controller.remove_breakpoint(line); 
+                line.bp_view.setAttribute("class", "cpp-line-no-breakpoint");
+            }else{
+                controller.add_breakpoint(line);
+                line.bp_view.setAttribute("class", "cpp-line-breakpoint");
+            }
+        };
+
+        var namespace_holder = controller.namespace_holder;
+        namespace_holder.globals.define("sqrt", new Type("(Fn(float)->float)", 0), sqrt);
         
         for(var i in globals){
             globals[i].create_lines(code);
@@ -66,10 +138,8 @@ span.cpp-keyword{
         }
         block = functions["main"];
         code.create_view();
-        document.body.appendChild(code.view);
+        document.getElementById("code").appendChild(code.view);
 	</script>
-    <div>
-        <span onclick="block.step(namespace_holder); code.highlight(block.get_current_line());namespace_holder.log();">step</span>
     </div>
 </body>
 

@@ -1,0 +1,41 @@
+table.code-line-holder{
+    font-family: monospace;
+    font-size: 15px;
+    margin: 0.3em;
+}
+td.cpp-line-number{
+    padding: 0.2em;
+    margin-right: 0.7em;
+    color: grey;
+}
+tr.cpp-line{
+}
+.cpp-line-breakpoint{
+    width: 1.2em;
+    background-image: url("stop.png");
+    background-repeat: no-repeat;
+    background-size: 1em, 1em;
+}
+.cpp-line-no-breakpoint{
+    width: 1.2em;
+}
+td.current{
+    color: red;
+    font-weight: bold;
+}
+span.cpp-type{
+    color: green;
+}
+span.cpp-tab{
+    width: 1.8em;
+    display: inline-block;
+}
+span.cpp-constant{
+    color: darkblue;
+}
+span.cpp-function-name{
+    color: teal;
+}
+span.cpp-keyword{
+    color: darkorange;
+}

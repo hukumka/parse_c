@@ -36,11 +36,25 @@ function Namespace(par){
 			this.par.log();
 		}
 	}
+
+    this.all_variables = function(){
+        var all = [];
+        if(this.par !== undefined){
+            all = this.par.all_variables();
+        }
+        for(var k in this.data){
+            all[k] = this.data[k];
+        }
+        return all;
+    }
 }
 
 function build_representation(data){
     if(data.value instanceof Array){
-        return data.value.map(function(x){return build_representation(x)});
+        return "[" + data.value.map(function(x){return build_representation(x)}).join(", ") + "]"
+    }else if(Number(data.value) === data.value){
+        var value = Math.round(data.value*1000)/1000;
+        return value;
     }else{
         return data.value;
     }
@@ -63,12 +77,23 @@ function NamespaceHolder(globals){
 	this.log = function(){
 		this.namespace.log();
 	}
-    this.function_call = function(){
+    this.function_call = function(args){
         this.function_stack.push(this.namespace);
         this.namespace = new Namespace(this.globals);
     }
     this.function_ret = function(){
         this.namespace = this.function_stack.pop();
+    }
+    this.get_display_html = function(){
+        var variables = this.namespace.all_variables();
+        var str = "";
+        for(var key in variables){
+            var val = variables[key];
+            if(val.type.name == "int" || val.type.name == "float"){
+                str += "<div class=\"variable-display-line\"><span class=\"cpp-type\">"+val.type.get_name()+"</span> " + key + " = " + build_representation(val) + "</div>"
+            }
+        }
+        return str;
     }
 }
 
@@ -77,6 +102,9 @@ function CodeLineHolder(){
     this.lines = [];
     this.tab = 0;
     this.current_line = undefined;
+
+    this.clicked = function(line){
+    }
 
     this.create_view = function(){
         this.view = document.createElement("table");
@@ -96,6 +124,15 @@ function CodeLineHolder(){
     }
 }
 
+function addListener(element, eventName, handler) {
+    if(element.addEventListener){
+        element.addEventListener(eventName, handler, false);
+    }else if(element.attachEvent){
+        element.attachEvent('on' + eventName, handler);
+    }else{
+        element['on' + eventName] = handler;
+    }
+}
 
 function CodeLine(line_holder, inner){
     this.line_holder = line_holder;
@@ -103,14 +140,28 @@ function CodeLine(line_holder, inner){
     line_holder.lines[this.line_id] = this;
     this.inner = inner;
 
+    this.clicked = function(){
+        this.line_holder.clicked(this.line);
+    }
+
     this.create_view = function(){
         var e = document.createElement("tr");
         e.setAttribute("class", "cpp-line");
+        e.line = this;
+        e.line_holder = this.line_holder;
+        addListener(e, "click", this.clicked);
+
+        this.bp_view = document.createElement("td");
+        this.bp_view.setAttribute("class", "cpp-line-no-breakpoint");
+        e.appendChild(this.bp_view);
+
         var line_num = document.createElement("td");
         this.number_view = line_num;
         line_num.setAttribute("class", "cpp-line-number");
         line_num.appendChild(document.createTextNode(this.line_id+1));
         e.appendChild(line_num);
+
+
         for(var i=0; i<this.line_holder.tab; ++i){
             var tab = document.createElement("span");
             tab.setAttribute("class", "cpp-tab");
@@ -158,6 +209,92 @@ function Type(name, pointer_count){
 }
 
 
+var globals = [];
+var functions = [];
+function Controller(){
+    this.namespace_holder = new NamespaceHolder();
+    this.namespace_holder.pop();
+    for(var i=0; i<globals.length; ++i){
+        globals[i].get(this.namespace_holder);
+    }
+    this.namespace_holder.push();
+    for(var fn in functions){
+        this.namespace_holder.globals.define(fn, new Type("(Fn)", 0), functions[fn]);
+    }
+
+    this.current_function = this.namespace_holder.namespace.get("main").value;
+    this.calls = undefined;
+    this.call_id = 0;
+    this.function_stack = [];
+
+    this.step = function(){
+        this.calls = undefined;
+        var res = this.current_function.step(this.namespace_holder);
+        if(res && this.function_stack.length > 0){
+            var bc = this.function_stack.pop();
+            this.calls = bc.calls;
+            this.call_id = bc.call_id+1;
+            this.current_function = bc.func;
+            this.namespace_holder.function_ret();
+            return false;
+        }else{
+            return res;
+        }
+    }
+
+    this.get_current_line = function(){
+        return this.current_function.get_current_line();
+    }
+
+    this.breakpoints = [];
+
+    this.add_breakpoint = function(line){
+        this.breakpoints.push(line);
+    }
+
+    this.is_breakpoint = function(line){
+        return this.breakpoints.indexOf(line) > -1;
+    }
+
+    this.remove_breakpoint = function(line){
+        var index = this.breakpoints.indexOf(line);
+        if(index > -1){
+            this.breakpoints.splice(index, 1);
+        }
+    }
+
+    this.continue_ = function(){
+        do{
+            if(this.step_into()){
+                break;
+            }
+        }while(this.breakpoints.indexOf(this.get_current_line()) == -1);
+    }
+
+    this.step_into = function(){
+        if(this.calls === undefined){
+            this.calls = this.current_function.calls_per_step(this.namespace_holder);
+            this.call_id = 0;
+        }
+        while(this.call_id < this.calls.length){
+            var name = this.calls[this.call_id].func;
+            var args = this.calls[this.call_id].args;
+            var func = this.namespace_holder.namespace.get(name).value;
+            if("set_args" in func && "step" in func){
+                this.function_stack.push({calls: this.calls, call_id: this.call_id, func: this.current_function});
+                this.current_function = func;
+                this.namespace_holder.function_call();
+                this.current_function.set_args(this.namespace_holder, args);
+                break;
+            }else{
+                this.call_id++;
+            }
+        }
+        return this.step();
+    }
+}
+
+
 function FunctionDef(ret_type, name, args, body){
     this.ret_type = ret_type;
     this.name = name;
@@ -178,6 +315,16 @@ function FunctionDef(ret_type, name, args, body){
         }
     }
 
+    this.set_args = function(namespace_holder, args){
+        for(var i=0; i<args.length; ++i){
+            namespace_holder.namespace.define(this.args[i].name, this.args[i].type, args[i].value);
+        }
+    }
+
+    this.calls_per_step = function(namespace_holder){
+        return this.body.calls_per_step(namespace_holder);
+    }
+
     this.reset = function(){
         this.body.reset();
     }
@@ -191,12 +338,15 @@ function FunctionDef(ret_type, name, args, body){
             for(var i=0; i<args.length; ++i){
                 namespace_holder.namespace.define(this.args[i].name, this.args[i].type, args[i].value);
             }
-            namespace_holder.log();
             var result = this.body.get(namespace_holder);
             namespace_holder.pop();
         }catch(err){
             if("result" in err){
-                return err.result;
+                if(this.name == "int"){
+                    return {value: Math.floor(err.result.value), type: new Type("int", 0)};
+                }else{
+                    return err.result;
+                }
             }else{
                 throw err;
             }
@@ -204,7 +354,11 @@ function FunctionDef(ret_type, name, args, body){
     }
 
     this.get_current_line = function(){
-        return this.body.get_current_line();
+        if(this.calls_into === undefined){
+            return this.body.get_current_line();
+        }else{
+            return this.calls_into.current_function.get_current_line();
+        }
     }
 
     this.create_lines = function(line_holder){
@@ -221,6 +375,9 @@ function FunctionDef(ret_type, name, args, body){
             var name = this.args[i].name;
             args.appendChild(type.create_view());
             args.appendChild(document.createTextNode(name));
+            if(i+1 < this.args.length){
+                args.appendChild(document.createTextNode(", "));
+            }
         }
         func_def_line.appendChild(args);
         func_def_line.appendChild(document.createTextNode("){"));
@@ -234,6 +391,13 @@ function FunctionDef(ret_type, name, args, body){
 
 function CppBody(statements){
     this.statements = statements;
+
+    this.calls_per_step = function(namespace_holder){
+        if(this.current_line === undefined){
+            return [];
+        }
+        return this.statements[this.current_line].calls_per_step(namespace_holder);
+    }
 
     this.current_line = undefined;
     this.step = function(namespace_holder){
@@ -292,6 +456,10 @@ function CppBody(statements){
 function StatementReturn(expression){
     this.expression = expression;
 
+    this.calls_per_step = function(namespace_holder){
+        return this.expression.calls_per_step(namespace_holder);
+    }
+
     this.step = function(namespace_holder){
         throw {result: this.expression.get(namespace_holder)};
     }
@@ -316,6 +484,10 @@ function StatementReturn(expression){
 
 function StatementExpression(expression){
     this.expression = expression;
+
+    this.calls_per_step = function(namespace_holder){
+        return this.expression.calls_per_step(namespace_holder);
+    }
 
     this.step = function(namespace_holder){
         this.expression.get(namespace_holder);
@@ -344,6 +516,17 @@ function StatementExpression(expression){
 function ExpressionFuncCall(name, args){
     this.name = name;
     this.args = args;
+
+    this.calls_per_step = function(namespace_holder){
+        var calls = [];
+        for(var i in this.args){
+            calls = calls.concat(this.args[i].calls_per_step(namespace_holder));
+        }
+        var args = this.args.map(function(x){return x.get(namespace_holder);})
+            .map(function(x){return {value: x.value, type: x.type};}); // shallow dereference
+        calls.push({func: this.name, args: args})
+        return calls;
+    }
 
     this.get = function(namespace_holder){
         var fn = namespace_holder.namespace.get(this.name).value;
@@ -386,6 +569,10 @@ function ExpressionConstant(value, type){
         }
     }
 
+    this.calls_per_step = function(namespace_holder){
+        return [];
+    }
+
     this.create_view = function(){
         this.view = document.createElement("span");
         this.view.setAttribute("class", "cpp-constant");
@@ -397,6 +584,10 @@ function ExpressionConstant(value, type){
 
 function ExpressionVariable(name){
     this.name = name;
+
+    this.calls_per_step = function(namespace_holder){
+        return [];
+    }
 
     this.get = function(namespace_holder){
         var res = namespace_holder.namespace.get(this.name);
@@ -437,6 +628,10 @@ function ExpressionBinOp(op, left, rigth){
 	this.op = op;
 	this.left = left;
 	this.right = rigth;
+
+    this.calls_per_step = function(namespace_holder){
+        return this.left.calls_per_step(namespace_holder).concat(this.right.calls_per_step(namespace_holder));
+    }
 	
 	this.get = function(namespace_holder){
 	    var left = this.left.get(namespace_holder);
@@ -492,7 +687,6 @@ function ExpressionBinOp(op, left, rigth){
 	        }
 	        return left;
 	    }else if(this.op == "-="){
-            console.log(left, this.right);
 	        var ref = left.reference;
 	        if(left.type.test("int")){
 	            left.value = Math.floor(left.value - right.value);
@@ -562,6 +756,10 @@ function ExpressionPrefixOp(op, right, need_par){
 	    need_par = false;
 	}
 	this.need_par = need_par;
+
+    this.calls_per_step = function(namespace_holder){
+        return this.right.calls_per_step(namespace_holder);
+    }
 	
 	this.get = function(namespace_holder){
 	    if(this.op == "++"){
@@ -602,6 +800,10 @@ function ExpressionSyffixOp(op, left, need_par){
 	    need_par = false;
 	}
 	this.need_par = need_par;
+
+    this.calls_per_step = function(namespace_holder){
+        return this.left.calls_per_step(namespace_holder);
+    }
 	
 	this.get = function(namespace_holder){
 	    if(this.op == "--"){
@@ -635,6 +837,10 @@ function ExpressionSyffixOp(op, left, need_par){
 function ExpressionNew(type, size){
 	this.type = type;
 	this.size = size;
+
+    this.calls_per_step = function(namespace_holder){
+        return this.size.calls_per_step(namespace_holder);
+    }
 	
 	this.get = function(namespace_holder){
 	    var res = {value: [], type: new Type(this.type.name, this.type.pointer_count+1)};
@@ -666,6 +872,10 @@ function ExpressionNew(type, size){
 function ExpressionIndex(from, index){
 	this.from = from;
 	this.index = index;
+
+    this.calls_per_step = function(namespace_holder){
+        return this.from.calls_per_step(namespace_holder).concat(this.index.calls_per_step(namespace_holder));
+    }
 	
 	this.get = function(namespace_holder){
 	    var from = this.from.get(namespace_holder);
@@ -689,6 +899,26 @@ function StatementCondition(ifs, else_block){
     this.else_block = else_block;
     this.current_if = undefined;
     this.inside_if = false;
+
+    this.calls_per_step = function(namespace_holder){
+        var cif = this.current_if;
+        if(cif === undefined){
+            cif = 0;
+        }
+        if(cif == this.ifs.length){
+            if(this.else_block !== undefined){
+                return this.else_block.calls_per_step(namespace_holder);
+            }else{
+                return [];
+            }
+        }else{
+            if(this.inside_if){
+                return this.ifs[cif].block.calls_per_step(namespace_holder);
+            }else{
+                return this.ifs[cif].condition.calls_per_step(namespace_holder);
+            }
+        }
+    }
 
     this.get = function(namespace_holder){
         for(var i=0; i<this.ifs.length; ++i){
@@ -810,6 +1040,16 @@ function StatementForLoop(init, step, cond, block){
 
     this.state = undefined;
 
+    this.calls_per_step = function(namespace_holder){
+        if(this.state === undefined){
+            return this.init.calls_per_step(namespace_holder).concat(this.cond.calls_per_step(namespace_holder));
+        }else if(this.state == 0){
+            return this.step_act.calls_per_step(namespace_holder).concat(this.cond.calls_per_step(namespace_holder));
+        }else{
+            return this.block.calls_per_step(namespace_holder);
+        }
+    }
+
     this.get = function(namespace_holder){
         namespace_holder.push();
         this.init.get(namespace_holder);
@@ -833,6 +1073,7 @@ function StatementForLoop(init, step, cond, block){
             }
             this.step(namespace_holder)
         }else if(this.state === 0){
+            this.step_act.get(namespace_holder);
             var val = this.cond.get(namespace_holder);
             if(val.value){
                 this.state = 1;
@@ -846,7 +1087,6 @@ function StatementForLoop(init, step, cond, block){
             if(res){
                 this.state = 0;
                 this.block.reset();
-                this.step_act.get(namespace_holder);
             }
         }
         return false;
@@ -890,6 +1130,15 @@ function StatementForLoop(init, step, cond, block){
 function StatementVarDef(type, assignments){
     this.type = type;
     this.assignments = assignments;
+
+    this.calls_per_step = function(namespace_holder){
+        var calls = [];
+        for(var i in this.assignments){
+            var a = this.assignments[i];
+            calls = calls.concat(a.expression.calls_per_step(namespace_holder));
+        }
+        return calls;
+    }
 
     this.get = function(line_holder){
         for(var i=0; i<this.assignments.length; ++i){
