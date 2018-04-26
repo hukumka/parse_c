@@ -120,16 +120,18 @@ pub struct SyffixOp{
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParseError{
-    msg: String,
-    where_: Option<TokenData>
+    pub msg: String,
+    pub derive_from: Vec<ParseError>,
+    pub where_: Option<TokenData>
 }
 
 
 impl ParseError{
-    fn extend_where(self, where_: Option<TokenData>)->Self{
-        ParseError{msg: self.msg, where_: self.where_.or(where_)}
+    fn extend_where(mut self, where_: Option<TokenData>)->Self{
+        self.where_ = self.where_.or(where_);
+        self
     }
 }
 
@@ -142,22 +144,58 @@ impl<T> AddWhereTrait for Result<T, ParseError>{
     }
 }
 
+
 macro_rules! parse_error_fmt{
     (#in $where_: expr; $($e: tt)*) => {
         {
             let mut msg = String::new();
             write!(msg, $($e)*).unwrap();
-            ParseError{msg, where_: $where_}
+            ParseError{msg, where_: $where_, derive_from: vec![]}
         }
     };
     ($($e: tt)*) => {
         {
             let mut msg = String::new();
             write!(msg, $($e)*).unwrap();
-            ParseError{msg, where_: None}
+            ParseError{msg, where_: None, derive_from: vec![]}
         }
     };
 }
+
+pub struct ResultBuilder<T>{
+    res: Result<T, ParseError>
+}
+
+impl<T> ResultBuilder<T>{
+    pub fn new(base_error: ParseError)->Self{
+        Self{res: Err(base_error)}
+    }
+
+    pub fn try<F: FnOnce()->Result<T, ParseError>>(mut self, func: F)->Self{
+        /*self.res = match self.res{
+            Ok(o) => Ok(o),
+            Err(mut e) => {
+                let r = func();
+                match r{
+                    Ok(o) => Ok(o),
+                    Err(e_in) => {
+                        e.derive_from.push(e_in);
+                        Err(e)
+                    }
+                }
+            }
+        };
+        self
+        */
+        self.res = self.res.or_else(|_| func());
+        self
+    }
+
+    pub fn build(self)->Result<T, ParseError>{
+        self.res
+    }
+}
+
 
 
 pub trait ParseFromBracketTree: Sized{
@@ -172,9 +210,12 @@ pub trait ParseFromBracketTree: Sized{
 
 impl ParseFromBracketTree for FunctionDef{
     fn parse(tree: &[BTI])->Result<(Self, &[BTI]), ParseError>{
-        let (type_, tree) = TypeName::parse(tree)?;
-        let (name, tree) = String::parse(tree)?;
-        let (arguments, tree) = parse_arguments(tree)?;
+        let (type_, tree) = TypeName::parse(tree)
+            .map_err(|_| parse_error_fmt!(#in tree.first().and_then(|e| e.first_token()); "Expected FunctionDef"))?;
+        let (name, tree) = String::parse(tree)
+            .map_err(|_| parse_error_fmt!(#in tree.first().and_then(|e| e.first_token()); "Expected FunctionDef"))?;
+        let (arguments, tree) = parse_arguments(tree)
+            .map_err(|_| parse_error_fmt!(#in tree.first().and_then(|e| e.first_token()); "Expected FunctionDef"))?;
         let (block, tree) = Block::parse(tree)?;
         Ok((Self{ret_type: type_, name, arguments, block}, tree))
     }
@@ -228,7 +269,7 @@ impl ParseFromBracketTree for String{
             if let Some(x) = get_name(x){
                 Ok((x.to_string(), rest))
             }else{
-                Err(parse_error_fmt!(#in x.first_token(); "String::parse: Expected string, but found {:?}", x))
+                Err(parse_error_fmt!(#in x.first_token(); "String::parse: Expected string"))
             }
         }else{
             Err(parse_error_fmt!("String::parse: Expected string, but tree is empty"))
@@ -242,7 +283,7 @@ impl ParseFromBracketTree for Operator{
             if let Some(x) = get_operator(x){
                 Ok((Operator{name: x.to_string()}, rest))
             }else{
-                Err(parse_error_fmt!(#in x.first_token(); "Operator::parse: Expected operator, but found {:?}", x))
+                Err(parse_error_fmt!(#in x.first_token(); "Operator::parse: Expected operator"))
             }
         }else{
             Err(parse_error_fmt!("String::parse: Expected operator, but tree is empty"))
@@ -266,8 +307,7 @@ fn parse_arguments(t: &[BTI])->Result<(Vec<(TypeName, String)>, &[BTI]), ParseEr
                     }else{
                         Err(parse_error_fmt!(
                             #in arg_tree[0].first_token(); 
-                            "parse_arguments: Expected , or ) but found {:?}", 
-                            arg_tree[0].first_token()
+                            "parse_arguments: Expected , or )"
                         ))
                     }
                 });
@@ -277,7 +317,7 @@ fn parse_arguments(t: &[BTI])->Result<(Vec<(TypeName, String)>, &[BTI]), ParseEr
             }
             Ok((x, rest))
         }else{
-            Err(parse_error_fmt!(#in tree.first_token(); "parse_arguments: Expected inner tree but found {:?}", tree))
+            Err(parse_error_fmt!(#in tree.first_token(); "parse_arguments: Expected inner tree"))
         }
     }else{
         Err(parse_error_fmt!("parse_arguments: Expected inner tree but tree is empty"))
@@ -298,7 +338,7 @@ impl ParseFromBracketTree for Block{
                 }
                 Ok((Self{statements: x}, rest))
             }else{
-                Err(parse_error_fmt!(#in tree.first_token(); "parse_arguments: Expected inner tree but found {:?}", tree))
+                Err(parse_error_fmt!(#in tree.first_token(); "parse_arguments: Expected inner tree but found"))
             }
         }else{
             Err(parse_error_fmt!("Block::parse: Expected inner tree but tree is empty"))
@@ -401,7 +441,7 @@ impl Condition{
                 Ok((Condition{ifs: vec![(expr, block)], else_block: None}, tree))
             }
         }else{
-            Err(parse_error_fmt!("Condition::parse: Expected ('condition'), but {:?} found.", cond))
+            Err(parse_error_fmt!("Condition::parse: Expected ('condition')"))
         }
     }
 }
@@ -409,12 +449,27 @@ impl Condition{
 
 impl ParseFromBracketTree for ForLoop{
     fn parse(tree: &[BTI])->Result<(Self, &[BTI]), ParseError>{
+        match ForLoop::parse_loop_setup(tree){
+            Ok((init, cond, increment, tree)) => {
+                let (block, tree) = parse_statement_or_block(tree)?;
+                Ok((ForLoop{init, step: increment, cond, block}, tree))
+            },
+            Err(e) => {
+                Err(e).add_where(tree.first().and_then(|x| x.first_token()))
+            }
+        }
+    }
+}
+
+impl ForLoop{
+    fn parse_loop_setup(tree: &[BTI])->Result<(ForLoopInit, Expression, Expression, &[BTI]), ParseError>{
         let (for_keyword, tree) = tree.split_first()
             .ok_or(parse_error_fmt!("ForLoop::parse: Expected for, but found nothing"))?;
         expect_keyword(for_keyword, &["for"], "ForLoop::parse")?;
 
         let (loop_setup, tree) = tree.split_first()
             .ok_or(parse_error_fmt!("ForLoop::parse: Expected for(*; *; *) but found nothing"))?;
+        
         if let &BTI::Tree(ref ls) = loop_setup{
             // parse initialization
             let ls = &ls.nodes;
@@ -433,11 +488,10 @@ impl ParseFromBracketTree for ForLoop{
                 .ok_or(parse_error_fmt!("ForLoop::parse: Expected ';' but found nothing"))?;
             let (increment, ls) = Expression::parse(ls)?;
             if ls.is_empty(){
-                let (block, tree) = parse_statement_or_block(tree)?;
-                Ok((ForLoop{init, step: increment, cond: condition, block}, tree))
+                Ok((init, condition, increment, tree))
             }else{
-                Err(parse_error_fmt!("ForLoop::parse: Expected ')' but '{:?}' found", tree))
-            }
+                Err(parse_error_fmt!("ForLoop::parse: Expected ')'"))
+            }    
         }else{
             Err(parse_error_fmt!("ForLoop::parse: Expected for(*; *; *) but found nothing"))
         }
@@ -545,12 +599,14 @@ impl Expression{
         if tree.is_empty(){
             Err(parse_error_fmt!("Expression::parse_from_slice: trying to parse empty expression"))
         }else{
-            Self::parse_constant(tree)
-                .or_else(|_| Self::parse_name(tree))
-                .or_else(|_| Self::parse_function_call(tree))
-                .or_else(|_| Self::parse_new(tree))
-                .or_else(|_| Self::parse_operators(tree))
-                .or_else(|_| Self::parse_index(tree))
+            ResultBuilder::new(parse_error_fmt!("Expression::parse_from_slice: expected name, function call, data allocation, operator tree or array indexing, but all failed"))
+                .try(|| Self::parse_constant(tree))
+                .try(|| Self::parse_name(tree))
+                .try(|| Self::parse_function_call(tree))
+                .try(|| Self::parse_new(tree))
+                .try(|| Self::parse_operators(tree))
+                .try(|| Self::parse_index(tree))
+                .build()
         }
     }
 
@@ -564,11 +620,11 @@ impl Expression{
                     Ok(Expression::New(Box::new((type_, expr))))
                 },
                 _ => {
-                    Err(parse_error_fmt!("Expression::parse_new: expected [..] but {:?} found", tree))
+                    Err(parse_error_fmt!("Expression::parse_new: expected [..]"))
                 }
             }
         }else{
-            Err(parse_error_fmt!("Expression::parse_new: expected 'new' but {:?} found", new))
+            Err(parse_error_fmt!("Expression::parse_new: expected 'new'"))
         }
     }
 
@@ -579,7 +635,7 @@ impl Expression{
                 let index = Expression::parse_from_slice(&t.nodes).add_where(t.brackets.clone().map(|a|a.1))?;
                 Ok(Expression::Index(Box::new((from, index))))
             }else{
-                Err(parse_error_fmt!("Expression::parse_new: expected [..] but {:?} found", t))
+                Err(parse_error_fmt!("Expression::parse_new: expected [..]"))
             }
         }else{
             Err(parse_error_fmt!("Expression::parse_new: expected [..] but nothing found"))
@@ -591,10 +647,10 @@ impl Expression{
             if let BTI::Token(TokenData{token: Token::Value(ref value), ..}) = tree[0]{
                 Ok(Expression::Constant(value.clone()))
             }else{
-                Err(parse_error_fmt!("Expression::parse_constant: Expected constant, found {:?}", tree[0]))
+                Err(parse_error_fmt!("Expression::parse_constant: Expected constant"))
             }
         }else{
-            Err(parse_error_fmt!("Expression::parse_constant: Expected constant, found {:?}", tree))
+            Err(parse_error_fmt!("Expression::parse_constant: Expected constant"))
         }
     }
 
@@ -603,10 +659,10 @@ impl Expression{
             if let Some(name) = get_name(&tree[0]){
                 Ok(Expression::Variable(name))
             }else{
-                Err(parse_error_fmt!("Expression::parse_name: Expected name, found {:?}", tree[0]))
+                Err(parse_error_fmt!("Expression::parse_name: Expected name"))
             }
         }else{
-            Err(parse_error_fmt!("Expression::parse_name: Expected name, found {:?}", tree))
+            Err(parse_error_fmt!("Expression::parse_name: Expected name"))
         }
     }
 
@@ -624,7 +680,7 @@ impl Expression{
                 }
             },
             _ => {
-                Err(parse_error_fmt!("Expression::parse_function_call: Expected argument list, found {:?}", tree))
+                Err(parse_error_fmt!("Expression::parse_function_call: Expected argument list"))
             }
         }
     }
@@ -658,7 +714,7 @@ impl Expression{
             Self::can_be_syffix
         ).build_tree(tree);
         if let parse_operators::Node::Leaf(x) = op_tree{
-            Err(parse_error_fmt!("Expression::parse_operators: expected complex expression, but {:?} found", x))
+            Err(parse_error_fmt!("Expression::parse_operators: expected complex expression"))
         }else{
             Self::operator_tree_to_expression(&op_tree)
         }

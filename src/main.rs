@@ -1,5 +1,3 @@
-#![feature(slice_patterns)]
-#![feature(advanced_slice_patterns)]
 #![feature(str_checked_slicing)]
 #![feature(box_patterns)]
 
@@ -7,8 +5,11 @@
 #[macro_use]
 extern crate cata;
 
+#[macro_use]
 mod parse;
 mod build;
+
+use std::fmt::Write;
 
 use std::fs::File;
 use std::io;
@@ -19,6 +20,7 @@ use cata::lexer::tokenize;
 use cata::parser::brackets::parse_brackets;
 
 use parse::{FunctionDef, Statement, ParseFromBracketTree};
+use parse::{ResultBuilder, ParseError};
 use build::{BuildJs, Formatable};
 
 
@@ -47,15 +49,64 @@ fn generate_js<T: fmt::Write>(c_code: &str, formatter: &mut T)->fmt::Result{
     let mut tree = tree.nodes.as_slice();
     while !tree.is_empty(){
         let res = FunctionDef::parse(tree);
-        if let Ok((func_def, tr)) = res{
-            write!(formatter, "functions[\"{}\"] = {};", func_def.name, Formatable::new(&|f| func_def.write(f)))?;
-            tree = tr;
-        }else{
-            let (stat, tr) = Statement::parse(tree).unwrap();
-            write!(formatter, "globals[globals.length] = {};", Formatable::new(&|f| stat.write(f)))?;
-            tree = tr;
+        match res{
+            Ok((func_def, tr)) => {
+                write!(formatter, "functions[\"{}\"] = {};", func_def.name, Formatable::new(&|f| func_def.write(f)))?;
+                tree = tr;
+            },
+            Err(e1) => {
+                match Statement::parse(tree){
+                    Ok((stat, tr)) => {
+                        write!(formatter, "globals[globals.length] = {};", Formatable::new(&|f| stat.write(f)))?;
+                        tree = tr;
+                    },
+                    Err(e2) => {
+                        if(e1.msg == "Expected FunctionDef"){
+                            eprintln!("{}", fancy_parse_error(c_code, e2));
+                        }else{
+                            eprintln!("{}", fancy_parse_error(c_code, e1));
+                        }
+                        panic!();
+                    }
+                }
+            }
         }
     }
     Ok(())
 }
 
+
+fn fancy_parse_error(c_code: &str, error: ParseError)->String{
+    //let (error, _) = deepest_error(&error);
+    let mut error_message = String::new();
+    write!(error_message, "{}\n", error.msg).unwrap();
+    if let Some(ref where_) = error.where_{
+        write!(error_message, "{:width$}\n", "V", width=where_.line_offset).unwrap();
+        write!(error_message, "{}\n", c_code.lines().skip(where_.line).next().unwrap()).unwrap();
+    }
+    if !error.derive_from.is_empty() && !error.msg.starts_with("Expression::"){
+        write!(error_message, "Error originates from: <<<\n").unwrap();
+        for e in &error.derive_from{
+            write!(error_message, "{}", fancy_parse_error(c_code, e.clone())).unwrap();
+        }
+        write!(error_message, ">>>\n").unwrap();
+    }
+    error_message
+    
+}
+
+
+fn deepest_error(error: &ParseError)->(&ParseError, usize){
+    error.derive_from.iter()
+        .map(|e| {
+            let (e, d) = deepest_error(e);
+            (e, d+1)
+        })
+        .fold((error, 0), |a, b|{
+            if a.1 >= b.1{
+                a
+            }else{
+                b
+            }
+        })
+}
